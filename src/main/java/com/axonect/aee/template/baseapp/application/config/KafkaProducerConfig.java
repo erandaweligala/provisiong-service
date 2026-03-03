@@ -128,14 +128,24 @@ public class KafkaProducerConfig {
     public ConcurrentMessageListenerContainer<String, String> replyContainer(
             ConsumerFactory<String, String> cf) {
 
-        // 2. Force the consumer factory to use your actual cluster address instead of localhost
+        // Force the consumer factory to use your actual cluster address instead of localhost
         if (cf instanceof DefaultKafkaConsumerFactory) {
             ((DefaultKafkaConsumerFactory<String, String>) cf)
                     .updateConfigs(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServersDC));
         }
 
         ContainerProperties containerProperties = new ContainerProperties(replyTopic);
-        containerProperties.setGroupId("spring-reply-group-provisioning"); // Use your unique group ID
+
+        // Each pod MUST have its own unique consumer group for the reply topic.
+        // With a shared group, Kafka distributes reply-topic partitions across pods,
+        // so a reply may land on a pod that did NOT send the request, causing timeouts.
+        // Using HOSTNAME (unique per Kubernetes pod) ensures every pod independently
+        // consumes ALL reply messages; the ReplyingKafkaTemplate filters by correlationId.
+        String podId = System.getenv("HOSTNAME");
+        if (podId == null || podId.isBlank()) {
+            podId = java.util.UUID.randomUUID().toString().substring(0, 8);
+        }
+        containerProperties.setGroupId("spring-reply-group-provisioning-" + podId);
 
         return new ConcurrentMessageListenerContainer<>(cf, containerProperties);
     }
