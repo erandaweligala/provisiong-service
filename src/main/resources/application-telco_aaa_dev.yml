@@ -1,0 +1,263 @@
+server:
+  port: 8089  # HTTPS port 8089 (changed from 8087)
+  ssl:
+    enabled: false
+#    key-store: classpath:aaacsg-server.p12
+#    key-store-password: Pass@456Bjd  # Replace with actual password
+#    key-store-type: PKCS12
+#    key-alias: aaacsg-server  # May need to verify this
+
+base-url:
+  context: /axonect/aee/templates/v1.0/base-template
+app:
+  host: /MICROSERVICE_NAME/
+  default:
+    group-id: 1
+
+  encryption:
+    algorithm: AES
+    secret-key: "Your16CharKey123"
+  async:
+    core-pool-size: 50
+    max-pool-size: 200
+    queue-capacity: 10000
+    thread-name-prefix: "async-validation-"
+
+  kafka:
+    cluster:
+      active: dc            # Primary cluster
+    publish-to-both: false   # Only DC for now
+
+    notification-topic: dc-provisioning    # ← ADD THIS LINE
+
+
+    topic:
+      user-events: dc-provisioning
+      db-write: dc-provisioning
+      service-events: dc-provisioning
+      bucket-events: dc-provisioning
+      super-template-events: dc-provisioning
+      child-template-events: dc-provisioning
+
+    publish:
+      timeout-ms: 5000
+      retry:
+        enabled: true
+        max-attempts: 2      #need to change in OCP
+      require-both-ack: false
+
+    verification: #need to change in OCP
+      enabled: true
+      max-attempts: 10
+      delay-ms: 500
+      timeout-ms: 5000
+      fail-on-timeout: true
+
+    message:
+      expiration-ms: 10000
+
+log:
+  identifierKey: UUID
+  isDebug: true
+info:
+  app:
+    name :  base-template
+    msName : base-template
+
+com:
+  adl:
+    dte:
+      plugins:
+        logging:
+          enabled: false
+          level: DEBUG
+        rolling:
+          policy: size
+          size: 100000kb
+        alarming:
+          enabled: true
+        msstat:
+          enabled: true
+
+springdoc:
+  packagesToScan: com.axonect.aee.template.baseapp.application.controller
+  pathsToMatch: /**
+  swagger-ui:
+    configUrl: /MICROSERVICE_NAME/v3/api-docs/swagger-config
+    url: /MICROSERVICE_NAME/v3/api-docs
+    disable-swagger-default-url: true
+  api-docs:
+    path: /v3/api-docs
+spring:
+  datasource:
+    url: jdbc:oracle:thin:@aaa-dev.cn8eyeqma3tp.ap-southeast-2.rds.amazonaws.com:1521/ORCL
+    username: aaa
+    password: Aaa!89nky78D
+    driver-class-name: oracle.jdbc.OracleDriver
+    hikari:
+      maximum-pool-size: 50
+      minimum-idle: 30
+      connection-timeout: 10000
+      idle-timeout: 3000
+      max-lifetime: 180000
+      pool-name: AAAHikariPool
+      leak-detection-threshold: 60000
+      data-source-properties:
+        oracle.net.CONNECT_TIMEOUT: 10000
+        oracle.jdbc.ReadTimeout: 30000
+
+  kafka:
+    bootstrap-servers:
+      dc: kafka-headless.cluster-dc.svc.cluster.local:9092
+      dr: kafka-headless.cluster-dc.svc.cluster.local:9092
+
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      retries: 3
+      properties:
+        max.in.flight.requests.per.connection: 5
+        compression.type: lz4
+        batch.size: 32768
+        linger.ms: 5
+        buffer.memory: 67108864
+        delivery.timeout.ms: 5000 #need to change in OCP   # ← was 300000 (5 min), now 5s — total send timeout
+        request.timeout.ms: 2000  #need to change in OCP   # ← was 120000 (2 min), now 2s — per-request timeout
+        max.block.ms: 2000        #need to change in OCP
+
+    consumer:
+      group-id: spring-reply-group-provisioning
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: latest
+      enable-auto-commit: true
+      properties:
+        fetch.min.bytes: 1
+        fetch.max.wait.ms: 500
+        session.timeout.ms: 10000
+        heartbeat.interval.ms: 3000
+
+  data:  #need to change in OCP
+    redis:
+      client-type: lettuce
+      password: AAAtest_Redis_Pass_w0rd!
+      timeout: 120000ms
+      sentinel:
+        master: mymaster
+        nodes:
+          - redis-cluster-headless.cluster-redis.svc.cluster.local:26379
+        password: AAAtest_Redis_Pass_w0rd!
+      lettuce:
+        pool:
+          max-active: 600        # equivalent to max-pool-size: 600
+          max-wait: 3000ms       # equivalent to max-pool-waiting: 3000
+          max-idle: 200
+          min-idle: 10
+        shutdown-timeout: 240000ms  # equivalent to pool-recycle-timeout: 240000
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.OracleDialect
+        jdbc:
+          batch_size: 20
+          fetch_size: 1000
+        order_inserts: true
+        order_updates: true
+        connection:
+          pool_size: 200         # Add this line (matches max-pool-size)
+
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration
+      - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+
+logging:
+  level:
+    root: INFO
+    org.apache.kafka: INFO
+    io.smallrye.reactive.messaging.kafka: INFO
+
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss,SSS} %-5p [%c{3.}] (%t) %s%e%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss,SSS} %-5p [%c{3.}] (%t) %s%e%n"
+
+  file:
+    name: /var/log/dte/${HOSTNAME:unknown}.log
+    max-size: 100MB
+    max-history: 10
+
+  logback:
+    rollingpolicy:
+      max-file-size: 100MB
+      max-history: 10
+      clean-history-on-start: true
+
+kafka:  #need to change in OCP
+  reply:
+    topic: db-write-events-reply-provisioning     # UPDATED from local — was db-write-events-reply; UNIQUE to provisioning service
+
+# Cache API Configuration
+cache:
+  api:
+    base-url: http://airtel-aaa-accounting-management-service-service.airtel-aaa.svc.cluster.local:9905/api/v1/cache/addBucket/{bucketUsername}
+    connect-timeout: 5000         # Connection timeout in milliseconds
+    read-timeout: 10              # Read timeout in seconds
+    write-timeout: 10             # Write timeout in seconds
+    response-timeout: 10          # Response timeout in seconds
+    max-connections: 100          # Maximum connections in pool
+    pending-acquire-timeout: 45   # Timeout for acquiring connection from pool (seconds)
+
+    # Retry Configuration
+    retry:
+      max-attempts: 3             # Maximum retry attempts
+      initial-backoff: 2          # Initial backoff in seconds
+      max-backoff: 10             # Maximum backoff in seconds
+
+    # Request Timeout
+    timeout:
+      request: 10                 # Individual request timeout in seconds
+
+accounting:
+  service:
+    # Base URL for the Quarkus accounting service (Kubernetes service DNS)
+    url: http://airtel-aaa-accounting-management-service-service.airtel-aaa.svc.cluster.local:9905
+
+    # Enable/disable CoA requests (set to false during maintenance or testing)
+    enabled: true
+
+    # Timeout Configuration
+    connect-timeout: 5000         # Connection timeout in milliseconds (5 seconds)
+    read-timeout: 10000           # Read timeout in milliseconds (10 seconds)
+
+    # Retry Configuration for CoA requests
+    retry:
+      enabled: true               # Enable retry logic for failed CoA requests
+      max-attempts: 3             # Maximum retry attempts
+      initial-backoff: 1000       # Initial backoff in milliseconds (1 second)
+      max-backoff: 5000           # Maximum backoff in milliseconds (5 seconds)
+
+thread:
+  count:
+    dbapiexecutor: 50
+
+#management:
+#  endpoints:
+#    web:
+#      base-path: /actuator
+#      exposure:
+#        include: "*"
+#      path-mapping:
+#        prometheus: prometheus
+#  endpoint:
+#    prometheus:
+#      enabled: true
+#  metrics:
+#    export:
+#      prometheus:
+#        enabled: true
