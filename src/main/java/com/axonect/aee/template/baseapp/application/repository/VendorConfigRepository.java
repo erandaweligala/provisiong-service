@@ -4,6 +4,7 @@ import com.axonect.aee.template.baseapp.domain.entities.dto.VendorConfig;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -57,4 +58,7 @@ public interface VendorConfigRepository extends JpaRepository<VendorConfig, Long
      * Find all vendor configs by vendorId with sorting
      */
     List<VendorConfig> findByVendorId(String vendorId, Sort sort);
+
+    @Query("SELECT DISTINCT v.vendorId, v.vendorName FROM VendorConfig v ORDER BY v.vendorName ASC")
+    List<Object[]> findDistinctVendorIdAndName();
 }

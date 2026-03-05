@@ -1093,7 +1093,7 @@ public class UserProvisioningService {
             if (result.isCompleteFailure()) {
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        "Failed to publish user created events to Kafka",
+                        result.getDcError(),
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
@@ -1107,7 +1107,7 @@ public class UserProvisioningService {
             log.error("Failed to publish user created events for '{}'", user.getUserName(), e);
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish user created events",
+                    e.getMessage(),
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -1134,7 +1134,7 @@ public class UserProvisioningService {
             log.error("Failed to publish user updated events for '{}'", user.getUserName(), e);
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish user updated events",
+                    e.getMessage(),
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -1150,6 +1150,11 @@ public class UserProvisioningService {
 
         } catch (Exception e) {
             log.error("Failed to publish user deleted events for '{}'", user.getUserName(), e);
+                throw new AAAException(
+                        LogMessages.ERROR_INTERNAL_ERROR,
+                        e.getMessage(),
+                        HttpStatus.INTERNAL_SERVER_ERROR
+                );
         }
     }
 

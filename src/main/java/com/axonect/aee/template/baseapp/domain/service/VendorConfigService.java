@@ -659,4 +659,24 @@ public class VendorConfigService {
             );
         }
     }
+
+    public record VendorSummary(String vendorId, String vendorName) {}
+
+    @Transactional(readOnly = true)
+    public List<VendorSummary> getVendorList() {
+        log.debug("Fetching distinct vendor ID and name list");
+        try {
+            return repository.findDistinctVendorIdAndName()
+                    .stream()
+                    .map(row -> new VendorSummary((String) row[0], (String) row[1]))
+                    .toList();
+        } catch (Exception e) {
+            log.error("Failed to fetch vendor list: {}", e.getMessage(), e);
+            throw new AAAException(
+                    "VENDOR_CONFIG_FETCH_ERROR",
+                    "Failed to fetch vendor list",
+                    HttpStatus.INTERNAL_SERVER_ERROR
+            );
+        }
+    }
 }

@@ -2,10 +2,10 @@ package com.axonect.aee.template.baseapp.application.config;
 
 import com.axonect.aee.template.baseapp.domain.events.*;
 import lombok.RequiredArgsConstructor;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.header.internals.RecordHeader;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,12 +28,8 @@ public class KafkaEventPublisher {
     @Qualifier("dcKafkaTemplate")
     private final KafkaTemplate<String, Object> dcKafkaTemplate;
 
-    /** Injected by Spring — @Autowired because it is not final (no constructor param conflict). */
     @Autowired
     private ReplyingKafkaTemplate<String, Object, String> replyingKafkaTemplate;
-
-    /** Generates a stable CRC32-based partition key for every outbound record. */
-    private final PartitionKeyGenerator partitionKeyGenerator;
 
     @Value("${app.kafka.cluster.active:dc}")
     private String activeCluster;
@@ -41,7 +37,7 @@ public class KafkaEventPublisher {
     @Value("${app.kafka.publish-to-both:true}")
     private boolean publishToBoth;
 
-    // ── Timeout / retry knobs ────────────────────────────────────────────────
+    // ── Timeout / retry knobs (all driven from application.yml) ─────────────
     @Value("${app.kafka.publish.timeout-ms:2000}")
     private long publishTimeoutMs;
 
@@ -52,7 +48,7 @@ public class KafkaEventPublisher {
     private int maxRetryAttempts;
     // ────────────────────────────────────────────────────────────────────────
 
-    // Topic names — all currently mapped to dc-provisioning
+    // Topic names
     private static final String USER_EVENTS_DC          = "dc-provisioning";
     private static final String DB_WRITE_DC              = "dc-provisioning";
     private static final String SERVICE_EVENTS_DC        = "dc-provisioning";
@@ -67,42 +63,17 @@ public class KafkaEventPublisher {
     // Core business ACK method
     // -----------------------------------------------------------------------
 
-    /**
-     * Sends {@code payload} to {@code topic} and waits for a consumer-level
-     * SUCCESS / FAILURE reply (request-reply pattern).
-     *
-     * <p>A stable {@code X-Partition-Key} header is stamped on every record so
-     * that downstream consumers and monitoring tools can correlate messages
-     * without depending solely on the Kafka message key.
-     *
-     * @param topic      destination Kafka topic
-     * @param cluster    logical cluster label used in log messages only
-     * @param key        Kafka message key (used for partitioning by the broker)
-     * @param payload    event payload object (serialised by the configured serialiser)
-     * @param eventType  human-readable event name, e.g. "USER_CREATED"
-     * @return {@code true} if the consumer acknowledged SUCCESS; {@code false} otherwise
-     */
     public boolean publishWithBusinessAck(String topic,
                                           String cluster,
                                           String key,
                                           Object payload,
                                           String eventType) {
-        // ── Build a stable partition key for this event+entity combination ──
-        String partitionKey = partitionKeyGenerator.generate(eventType, key);
-        byte[] partitionKeyBytes = partitionKey.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-
         int attempt = 0;
 
         while (attempt < maxRetryAttempts) {
             attempt++;
             try {
-                // Stamp the partition key as a Kafka record header
                 ProducerRecord<String, Object> record = new ProducerRecord<>(topic, key, payload);
-                record.headers().add(
-                        new RecordHeader(PartitionKeyGenerator.PARTITION_KEY_HEADER, partitionKeyBytes));
-
-                log.debug("[{}] Publishing {} event – key: '{}', partitionKey: {}",
-                        cluster, eventType, key, partitionKey);
 
                 RequestReplyFuture<String, Object, String> future =
                         replyingKafkaTemplate.sendAndReceive(record, Duration.ofMillis(publishTimeoutMs));
@@ -111,8 +82,8 @@ public class KafkaEventPublisher {
                 SendResult<String, Object> sendResult =
                         future.getSendFuture().get(publishTimeoutMs, TimeUnit.MILLISECONDS);
 
-                log.debug("[{}] Broker ACK for {} (key: '{}', partitionKey: {}) – partition: {}, offset: {}",
-                        cluster, eventType, key, partitionKey,
+                log.debug("[{}] Broker ACK received for {} event (key: '{}') – Partition: {}, Offset: {}",
+                        cluster, eventType, key,
                         sendResult.getRecordMetadata().partition(),
                         sendResult.getRecordMetadata().offset());
 
@@ -120,35 +91,58 @@ public class KafkaEventPublisher {
                 ConsumerRecord<String, String> reply = future.get(publishTimeoutMs, TimeUnit.MILLISECONDS);
 
                 String result = reply.value();
+
                 if ("SUCCESS".equalsIgnoreCase(result)) {
-                    log.info("[{}] Consumer confirmed SUCCESS for {} (key: '{}', partitionKey: {})",
-                            cluster, eventType, key, partitionKey);
+                    log.info("[{}] Consumer confirmed success for {} event (key: '{}')",
+                            cluster, eventType, key);
                     return true;
+
                 } else {
-                    log.warn("[{}] Consumer reported FAILURE: '{}' for {} (key: '{}', partitionKey: {}). Retrying...",
-                            cluster, result, eventType, key, partitionKey);
+                    // Strip the "FAIL: " prefix if present for a cleaner message
+                    String errorMessage = (result != null && result.toUpperCase().startsWith("FAIL:"))
+                            ? result.substring(5).trim()
+                            : result;
+
+                    log.warn("[{}] Consumer reported failure: '{}' for {} event (key: '{}')",
+                            cluster, result, eventType, key);
+
+                    // Throw immediately — business NACK should not be retried
+                    throw new ConsumerReplyException(
+                            String.format("[%s] Consumer NACK for %s event (key: '%s'): %s",
+                                    cluster, eventType, key, errorMessage)
+                    );
                 }
 
+            } catch (ConsumerReplyException e) {
+                // Business-level rejection from consumer — propagate immediately, no retry
+                throw e;
+
             } catch (Exception e) {
-                log.error("[{}] Attempt {}/{} failed for {} (key: '{}', partitionKey: {}): {}",
-                        cluster, attempt, maxRetryAttempts, eventType, key, partitionKey, e.getMessage());
-            }
+                log.error("[{}] Attempt {}/{} failed for {} event (key: '{}'): {}",
+                        cluster, attempt, maxRetryAttempts, eventType, key, e.getMessage());
 
-            if (!retryEnabled || attempt >= maxRetryAttempts) {
-                break;
-            }
+                if (!retryEnabled || attempt >= maxRetryAttempts) {
+                    log.error("[{}] Max retry attempts reached for {} event (key: '{}') – giving up",
+                            cluster, eventType, key);
 
-            try {
-                long backoffMs = (long) Math.pow(2, attempt) * 100; // 200 ms, 400 ms
-                Thread.sleep(backoffMs);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                break;
+                    throw new RuntimeException(
+                            String.format("Something went wrong",
+                                    cluster, maxRetryAttempts, eventType, key), e
+                    );
+                }
+
+                try {
+                    long backoffMs = (long) Math.pow(2, attempt) * 100; // 200ms, 400ms
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
             }
         }
 
-        log.error("[{}] FINAL NACK for {} (key: '{}', partitionKey: {}) after {} attempt(s)",
-                cluster, eventType, key, partitionKey, attempt);
+        log.error("[{}] FINAL NACK for {} event (key: '{}') after {} attempts",
+                cluster, eventType, key, attempt);
         return false;
     }
 
@@ -157,52 +151,51 @@ public class KafkaEventPublisher {
     // -----------------------------------------------------------------------
 
     public PublishResult publishUserEvent(String eventType, UserEvent userEvent) {
-        boolean success = publishWithBusinessAck(
-                USER_EVENTS_DC, "DC", userEvent.getUserName(), userEvent, eventType);
+        String key = userEvent.getUserName();
+        boolean success = publishWithBusinessAck(USER_EVENTS_DC, "DC", key, userEvent, eventType);
         return PublishResult.builder().dcSuccess(success).drSuccess(false).build();
     }
 
     public PublishResult publishDBWriteEvent(DBWriteRequestGeneric dbWriteEvent) {
-        boolean success = publishWithBusinessAck(
-                DB_WRITE_DC, "DC", dbWriteEvent.getUserName(), dbWriteEvent, dbWriteEvent.getEventType());
+        String key = dbWriteEvent.getUserName();
+        boolean success = publishWithBusinessAck(DB_WRITE_DC, "DC", key, dbWriteEvent,
+                dbWriteEvent.getEventType());
         return PublishResult.builder().dcSuccess(success).drSuccess(false).build();
     }
 
     public PublishResult publishServiceEvent(String eventType, ServiceEvent serviceEvent) {
-        boolean success = publishWithBusinessAck(
-                SERVICE_EVENTS_DC, "DC", serviceEvent.getUsername(), serviceEvent, eventType);
+        String key = serviceEvent.getUsername();
+        boolean success = publishWithBusinessAck(SERVICE_EVENTS_DC, "DC", key, serviceEvent, eventType);
         return PublishResult.builder().dcSuccess(success).drSuccess(false).build();
     }
 
     public PublishResult publishBucketEvent(String eventType, BucketEvent bucketEvent, String username) {
-        boolean success = publishWithBusinessAck(
-                BUCKET_EVENTS_DC, "DC", username, bucketEvent, eventType);
+        boolean success = publishWithBusinessAck(BUCKET_EVENTS_DC, "DC", username, bucketEvent, eventType);
         return PublishResult.builder().dcSuccess(success).drSuccess(false).build();
     }
 
     public PublishResult publishSuperTemplateEvent(String eventType, SuperTemplateEvent event) {
         String key = String.valueOf(event.getSuperTemplateId());
-        boolean success = publishWithBusinessAck(
-                SUPER_TEMPLATE_EVENTS_DC, "DC", key, event, eventType);
+        boolean success = publishWithBusinessAck(SUPER_TEMPLATE_EVENTS_DC, "DC", key, event, eventType);
         return PublishResult.builder().dcSuccess(success).drSuccess(false).build();
     }
 
     public PublishResult publishChildTemplateEvent(String eventType, ChildTemplateEvent event, String userName) {
         String key = String.valueOf(event.getChildTemplateId());
-        boolean success = publishWithBusinessAck(
-                CHILD_TEMPLATE_EVENTS_DC, "DC", key, event, eventType);
+        boolean success = publishWithBusinessAck(CHILD_TEMPLATE_EVENTS_DC, "DC", key, event, eventType);
         return PublishResult.builder().dcSuccess(success).drSuccess(false).build();
     }
 
     public PublishResult publishBngEvent(String eventType, BngEvent bngEvent) {
-        boolean success = publishWithBusinessAck(
-                BNG_EVENTS_DC, "DC", bngEvent.getBngId(), bngEvent, eventType);
+        String key = bngEvent.getBngId();
+        boolean success = publishWithBusinessAck(BNG_EVENTS_DC, "DC", key, bngEvent, eventType);
         return PublishResult.builder().dcSuccess(success).drSuccess(false).build();
     }
 
     public PublishResult publishBngDBWriteEvent(DBWriteRequestGeneric dbWriteEvent) {
-        boolean success = publishWithBusinessAck(
-                DB_WRITE_DC, "DC", dbWriteEvent.getUserName(), dbWriteEvent, dbWriteEvent.getEventType());
+        String key = dbWriteEvent.getUserName();
+        boolean success = publishWithBusinessAck(DB_WRITE_DC, "DC", key, dbWriteEvent,
+                dbWriteEvent.getEventType());
         return PublishResult.builder().dcSuccess(success).drSuccess(false).build();
     }
 
@@ -210,27 +203,27 @@ public class KafkaEventPublisher {
         String key = actionLogEvent.getRequestId() != null
                 ? actionLogEvent.getRequestId()
                 : String.valueOf(actionLogEvent.getId());
-        boolean success = publishWithBusinessAck(
-                ACTION_LOG_EVENTS_DC, "DC", key, actionLogEvent, eventType);
+        boolean success = publishWithBusinessAck(ACTION_LOG_EVENTS_DC, "DC", key, actionLogEvent, eventType);
         return PublishResult.builder().dcSuccess(success).drSuccess(false).build();
     }
 
     public PublishResult publishActionLogDBWriteEvent(DBWriteRequestGeneric dbWriteEvent) {
-        boolean success = publishWithBusinessAck(
-                DB_WRITE_DC, "DC", dbWriteEvent.getUserName(), dbWriteEvent, dbWriteEvent.getEventType());
+        String key = dbWriteEvent.getUserName();
+        boolean success = publishWithBusinessAck(DB_WRITE_DC, "DC", key, dbWriteEvent,
+                dbWriteEvent.getEventType());
         return PublishResult.builder().dcSuccess(success).drSuccess(false).build();
     }
 
     public PublishResult publishVendorConfigEvent(String eventType, VendorConfigEvent vendorConfigEvent) {
         String key = vendorConfigEvent.getVendorId() + "-" + vendorConfigEvent.getAttributeId();
-        boolean success = publishWithBusinessAck(
-                VENDOR_CONFIG_EVENTS_DC, "DC", key, vendorConfigEvent, eventType);
+        boolean success = publishWithBusinessAck(VENDOR_CONFIG_EVENTS_DC, "DC", key, vendorConfigEvent, eventType);
         return PublishResult.builder().dcSuccess(success).drSuccess(false).build();
     }
 
     public PublishResult publishVendorConfigDBWriteEvent(DBWriteRequestGeneric dbWriteEvent) {
-        boolean success = publishWithBusinessAck(
-                DB_WRITE_DC, "DC", dbWriteEvent.getUserName(), dbWriteEvent, dbWriteEvent.getEventType());
+        String key = dbWriteEvent.getUserName();
+        boolean success = publishWithBusinessAck(DB_WRITE_DC, "DC", key, dbWriteEvent,
+                dbWriteEvent.getEventType());
         return PublishResult.builder().dcSuccess(success).drSuccess(false).build();
     }
 

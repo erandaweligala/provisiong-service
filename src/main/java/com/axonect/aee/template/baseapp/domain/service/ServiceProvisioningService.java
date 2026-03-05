@@ -767,7 +767,7 @@ public class ServiceProvisioningService {
             if (result.isCompleteFailure()) {
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        "Failed to publish service created events to Kafka",
+                        result.getDcError(),
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
@@ -781,7 +781,7 @@ public class ServiceProvisioningService {
         } catch (Exception e) {
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish service created events",
+                    e.getMessage(),
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -803,7 +803,7 @@ public class ServiceProvisioningService {
             if (result.isCompleteFailure()) {
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        "Failed to publish service updated events to Kafka",
+                        result.getDcError(),
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
@@ -817,7 +817,7 @@ public class ServiceProvisioningService {
         } catch (Exception e) {
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish service updated events",
+                    e.getMessage(),
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -841,7 +841,7 @@ public class ServiceProvisioningService {
         } catch (Exception e) {
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish service deleted events",
+                    e.getMessage(),
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }

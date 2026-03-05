@@ -121,6 +121,15 @@ public class VendorConfigController {
     }
 
     /**
+     * Get distinct list of vendor IDs and names
+     */
+    @GetMapping("/list")
+    public ResponseEntity<ApiResponse> getVendorList() {
+        List<VendorConfigService.VendorSummary> vendors = service.getVendorList();
+        return ResponseEntity.ok(new ApiResponse(true, "Vendor list retrieved successfully", vendors));
+    }
+
+    /**
      * Standard API response wrapper
      */
     @Getter

@@ -127,7 +127,7 @@ spring:
         max.block.ms: 2000        #need to change in OCP
 
     consumer:
-      group-id: spring-reply-group-provisioning
+      group-id: spring-reply-group-provisioning   # UPDATED from local — was spring-reply-group; UNIQUE to provisioning service
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       auto-offset-reset: latest

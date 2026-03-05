@@ -136,11 +136,6 @@ public class KafkaProducerConfig {
 
         ContainerProperties containerProperties = new ContainerProperties(replyTopic);
 
-        // Each pod MUST have its own unique consumer group for the reply topic.
-        // With a shared group, Kafka distributes reply-topic partitions across pods,
-        // so a reply may land on a pod that did NOT send the request, causing timeouts.
-        // Using HOSTNAME (unique per Kubernetes pod) ensures every pod independently
-        // consumes ALL reply messages; the ReplyingKafkaTemplate filters by correlationId.
         String podId = System.getenv("HOSTNAME");
         if (podId == null || podId.isBlank()) {
             podId = java.util.UUID.randomUUID().toString().substring(0, 8);
