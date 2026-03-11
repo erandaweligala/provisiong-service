@@ -203,7 +203,7 @@ public class UserProvisioningService {
     }
     private void validateDuplicateUserAndRequestId(CreateUserRequest request) throws Exception {
         CompletableFuture<Object>[] checks = asyncAdaptor.supplyAll(
-                6000L,
+                2000L,
                 () -> userRepository.existsByUserName(request.getUserName()),
                 () -> userRepository.existsByRequestId(request.getRequestId())
         );
@@ -416,10 +416,23 @@ public class UserProvisioningService {
                 }
             }
 
+            // --- Batch fetch MAC addresses (single query instead of N+1) ---
+            List<String> userNames = userPage.getContent().stream()
+                    .map(UserEntity::getUserName)
+                    .toList();
+            Map<String, String> macMap = new java.util.HashMap<>();
+            if (!userNames.isEmpty()) {
+                userToMacRepository.findByUserNameIn(userNames).stream()
+                        .collect(java.util.stream.Collectors.groupingBy(UserToMac::getUserName))
+                        .forEach((name, macs) -> macMap.put(name,
+                                macs.stream().map(UserToMac::getOriginalMacAddress)
+                                        .collect(Collectors.joining(", "))));
+            }
+
             // --- Mapping Timing ---
             long mapStart = System.currentTimeMillis();
             List<UserResponse> users = userPage.getContent().stream()
-                    .map(this::mapToResponse)
+                    .map(user -> mapToResponse(user, macMap.get(user.getUserName())))
                     .toList();
             long mapDuration = System.currentTimeMillis() - mapStart;
             log.info("Mapping UserEntity → UserResponse for {} records took {} ms", users.size(), mapDuration);
@@ -1221,9 +1234,8 @@ public class UserProvisioningService {
             log.info("Publishing MAC DELETE event for user '{}'", userName);
             publishMacAddressDeleteEvent(userName);
 
-            // Step 2: Minimal wait - DB op is fire-and-forget direct SQL (~10ms)
-            // 100ms is more than enough buffer
-            Thread.sleep(350);
+            // Step 2: Minimal wait for DELETE to propagate via Kafka consumer
+            Thread.sleep(50);
 
             // Step 3: Publish INSERTs sequentially with tiny gap
             List<String> failedMacs = new ArrayList<>();
@@ -1237,10 +1249,7 @@ public class UserProvisioningService {
                     successCount++;
                 }
 
-                // 30ms gap is enough since DB write is direct SQL fire-and-forget
-                if (i < macList.size() - 1) {
-                    Thread.sleep(30);
-                }
+                // No inter-MAC delay needed — Kafka publish is already synchronous
             }
 
             // Step 4: Fail loudly if any MAC failed
@@ -2182,7 +2191,7 @@ public class UserProvisioningService {
 
         // Check if request_id exists for another user
         boolean requestIdExists = (boolean) asyncAdaptor.supplyAll(
-                6000L,
+                2000L,
                 () -> userRepository.existsByRequestId(request.getRequestId())
         )[0].get();
 
@@ -2482,7 +2491,7 @@ public class UserProvisioningService {
     }
 
     private UserResponse mapToResponse(UserEntity user) {
-        // Fetch MAC addresses for the user
+        // Fetch MAC addresses for the user (used for single-user lookups)
         List<UserToMac> macAddresses = userToMacRepository.findByUserName(user.getUserName());
         String macString = null;
         if (!macAddresses.isEmpty()) {
@@ -2490,7 +2499,10 @@ public class UserProvisioningService {
                     .map(UserToMac::getOriginalMacAddress)
                     .collect(Collectors.joining(", "));
         }
+        return mapToResponse(user, macString);
+    }
 
+    private UserResponse mapToResponse(UserEntity user, String macString) {
         return UserResponse.builder()
                 .userId(user.getUserId())
                 .encryptionMethod(user.getEncryptionMethod())
@@ -2579,19 +2591,19 @@ public class UserProvisioningService {
         long methodStart = System.currentTimeMillis();
 
         try {
-            // --- DB Fetch Timing ---
+            // --- DB Fetch Timing (projection query - only fetches userName column) ---
             long dbStart = System.currentTimeMillis();
-            List<UserEntity> allUsers = userRepository.findAll();
+            List<String> allUserNames = userRepository.findAllUserNames();
             long dbDuration = System.currentTimeMillis() - dbStart;
-            log.info("DB fetch for getUserList completed in {} ms with {} records", dbDuration, allUsers.size());
+            log.info("DB fetch for getUserList completed in {} ms with {} records", dbDuration, allUserNames.size());
 
             // --- Mapping Timing ---
             long mapStart = System.currentTimeMillis();
-            List<UserListResponse> userList = allUsers.stream()
-                    .map(user -> new UserListResponse(user.getUserName()))
+            List<UserListResponse> userList = allUserNames.stream()
+                    .map(UserListResponse::new)
                     .toList();
             long mapDuration = System.currentTimeMillis() - mapStart;
-            log.info("Mapping UserEntity → UserListResponse for {} usernames took {} ms", userList.size(), mapDuration);
+            log.info("Mapping userName → UserListResponse for {} usernames took {} ms", userList.size(), mapDuration);
 
             return userList;
 

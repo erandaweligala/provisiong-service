@@ -29,4 +29,6 @@ public interface UserToMacRepository extends JpaRepository<UserToMac, Long> {
 
     @Query("SELECT m FROM UserToMac m WHERE m.macAddress IN :macAddresses AND m.userName != :userName")
     List<UserToMac> findByMacAddressInAndUserNameNot(@Param("macAddresses") List<String> macAddresses, @Param("userName") String userName);
+
+    List<UserToMac> findByUserNameIn(List<String> userNames);
 }

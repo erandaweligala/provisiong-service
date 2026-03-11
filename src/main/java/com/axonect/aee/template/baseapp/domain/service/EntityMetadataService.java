@@ -16,6 +16,9 @@ public class EntityMetadataService {
     // Map of table names to entity classes
     private static final Map<String, Class<?>> TABLE_TO_ENTITY_MAP = new HashMap<>();
 
+    // Cache reflection results — entity classes are immutable at runtime
+    private static final Map<String, List<String>> COLUMN_CACHE = new HashMap<>();
+
     static {
         TABLE_TO_ENTITY_MAP.put("AAA_USER", UserEntity.class);
         TABLE_TO_ENTITY_MAP.put("SERVICE_INSTANCE", ServiceInstance.class);
@@ -30,19 +33,20 @@ public class EntityMetadataService {
      * @return List of column names sorted alphabetically
      */
     public List<String> getEntityColumns(String entityName) {
-        // Convert to uppercase for case-insensitive matching
         String normalizedName = entityName.toUpperCase();
 
-        Class<?> entityClass = TABLE_TO_ENTITY_MAP.get(normalizedName);
+        return COLUMN_CACHE.computeIfAbsent(normalizedName, key -> {
+            Class<?> entityClass = TABLE_TO_ENTITY_MAP.get(key);
 
-        if (entityClass == null) {
-            throw new IllegalArgumentException(
-                    String.format("Entity '%s' not found. Available entities: AAA_USER, SERVICE_INSTANCE, BUCKET_INSTANCE",
-                            entityName)
-            );
-        }
+            if (entityClass == null) {
+                throw new IllegalArgumentException(
+                        String.format("Entity '%s' not found. Available entities: AAA_USER, SERVICE_INSTANCE, BUCKET_INSTANCE",
+                                entityName)
+                );
+            }
 
-        return extractColumnNames(entityClass);
+            return Collections.unmodifiableList(extractColumnNames(entityClass));
+        });
     }
 
     /**
