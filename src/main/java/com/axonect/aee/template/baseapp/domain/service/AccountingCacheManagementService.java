@@ -23,6 +23,8 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AccountingCacheManagementService {
 
+    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+
     private final WebClient cacheApiWebClient;
 
     @Value("${cache.api.base-url}")
@@ -122,6 +124,7 @@ public class AccountingCacheManagementService {
         log.debug("Making PATCH request to: {}", fullUrl);
 
         // Make API call and wait for response
+        // Timeout is handled at HttpClient level (ReadTimeoutHandler) — no duplicate .timeout() needed
         cacheApiWebClient
                 .patch()
                 .uri(fullUrl)
@@ -129,7 +132,6 @@ public class AccountingCacheManagementService {
                 .bodyValue(request)
                 .retrieve()
                 .toBodilessEntity()
-                .timeout(Duration.ofSeconds(requestTimeoutSeconds))
                 .retryWhen(Retry.backoff(maxRetryAttempts, Duration.ofSeconds(initialBackoffSeconds))
                         .maxBackoff(Duration.ofSeconds(maxBackoffSeconds))
                         .filter(this::shouldRetry)
@@ -137,17 +139,6 @@ public class AccountingCacheManagementService {
                                 log.warn("Retrying bucketId: {} for user: {}, attempt: {}/{}",
                                         bucket.getBucketId(), bucketUsername,
                                         signal.totalRetries() + 1, maxRetryAttempts)))
-                .flatMap(response -> {
-                    if (response.getStatusCode().equals(HttpStatus.OK)) {
-                        log.debug("Received HTTP 200 for bucketId: {}", bucket.getBucketId());
-                        return reactor.core.publisher.Mono.empty();
-                    } else {
-                        log.error("Non-200 status for bucketId: {}. Status: {}",
-                                bucket.getBucketId(), response.getStatusCode());
-                        return reactor.core.publisher.Mono.error(
-                                new RuntimeException("Expected HTTP 200 but got " + response.getStatusCode()));
-                    }
-                })
                 .block(); // Block and wait for completion
     }
 
@@ -168,8 +159,6 @@ public class AccountingCacheManagementService {
      * Build request from bucket instance
      */
     private CacheBucketRequest buildRequest(BucketInstance instance, String bucketUsername, String serviceStatus) {
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
-
         return CacheBucketRequest.builder()
                 .initialBalance(instance.getInitialBalance() != null ? instance.getInitialBalance() : 0L)
                 .quota(instance.getInitialBalance() != null ? instance.getInitialBalance() : 0L)
@@ -180,8 +169,8 @@ public class AccountingCacheManagementService {
                 .serviceId(String.valueOf(instance.getServiceId()))
                 .priority(instance.getPriority() != null ? instance.getPriority().intValue() : 4)
                 .serviceStartDate(instance.getExpiration() != null ?
-                        instance.getExpiration().minusMonths(2).format(formatter) :
-                        java.time.LocalDateTime.now().format(formatter))
+                        instance.getExpiration().minusMonths(2).format(DATE_TIME_FORMATTER) :
+                        java.time.LocalDateTime.now().format(DATE_TIME_FORMATTER))
                 .serviceStatus(serviceStatus)
                 .timeWindow(StringUtils.hasText(instance.getTimeWindow()) ? instance.getTimeWindow() : "6AM-03AM")
                 .consumptionLimit(instance.getConsumptionLimit() != null ? instance.getConsumptionLimit() : 0L)

@@ -77,10 +77,12 @@ public interface BucketInstanceRepository extends JpaRepository<BucketInstance,L
         JOIN QOSProfile q       ON b.rule       = q.bngCode
         JOIN Plan p             ON si.planId    = p.planId
         WHERE si.username IN :usernames
-        AND b.priority = (
-            SELECT MIN(b2.priority)
+        AND b.id = (
+            SELECT b2.id
             FROM BucketInstance b2
             WHERE b2.serviceId = si.id
+            ORDER BY b2.priority ASC
+            FETCH FIRST 1 ROW ONLY
         )
         ORDER BY si.username, si.id
         """)

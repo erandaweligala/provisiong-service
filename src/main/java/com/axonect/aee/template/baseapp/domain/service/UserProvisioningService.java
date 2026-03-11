@@ -160,9 +160,10 @@ public class UserProvisioningService {
                 superTemplateRepository.findById(user.getTemplateId()).ifPresent(template -> user.setTemplateName(template.getTemplateName()));
             }
 
-            //  PUBLISH TO KAFKA
+            //  PUBLISH TO KAFKA (blocking — must succeed)
             publishUserCreatedEvents(user);
-            sendUserCreationNotification(user);
+            // Notification is best-effort, run async
+            CompletableFuture.runAsync(() -> sendUserCreationNotification(user));
 
 
             MDC.put(USERID, user.getUserId());
@@ -203,7 +204,7 @@ public class UserProvisioningService {
     }
     private void validateDuplicateUserAndRequestId(CreateUserRequest request) throws Exception {
         CompletableFuture<Object>[] checks = asyncAdaptor.supplyAll(
-                6000L,
+                2000L,
                 () -> userRepository.existsByUserName(request.getUserName()),
                 () -> userRepository.existsByRequestId(request.getRequestId())
         );
@@ -328,23 +329,23 @@ public class UserProvisioningService {
                             HttpStatus.NOT_FOUND
                     ));
 
-            // Fetch MAC addresses
-            List<UserToMac> macAddresses = userToMacRepository.findByUserName(userName);
-            if (!macAddresses.isEmpty()) {
-                String macString = macAddresses.stream()
-                        .map(UserToMac::getOriginalMacAddress)
-                        .collect(Collectors.joining(", "));
-                user.setMacAddress(macString);
-            }
+            // Fetch MAC addresses and template in parallel — they are independent
+            CompletableFuture<List<UserToMac>> macFuture = CompletableFuture.supplyAsync(
+                    () -> userToMacRepository.findByUserName(userName));
 
-            // Fetch template if exists
-            if (user.getTemplateId() != null) {
-                SuperTemplate template = superTemplateRepository.findById(user.getTemplateId())
-                        .orElse(null);
-                if (template != null) {
-                    user.setTemplateName(template.getTemplateName());
-                }
+            CompletableFuture<String> templateFuture = (user.getTemplateId() != null)
+                    ? CompletableFuture.supplyAsync(() ->
+                            superTemplateRepository.findById(user.getTemplateId())
+                                    .map(SuperTemplate::getTemplateName).orElse(null))
+                    : CompletableFuture.completedFuture(null);
+
+            List<UserToMac> macAddresses = macFuture.join();
+            if (!macAddresses.isEmpty()) {
+                user.setMacAddress(macAddresses.stream()
+                        .map(UserToMac::getOriginalMacAddress)
+                        .collect(Collectors.joining(", ")));
             }
+            user.setTemplateName(templateFuture.join());
 
             MDC.put(USERID, user.getUserId());
             log.info("User '{}' successfully retrieved", userName);
@@ -397,24 +398,42 @@ public class UserProvisioningService {
             long dbDuration = System.currentTimeMillis() - dbStart;
             log.info("DB query for getAllUsers completed in {} ms", dbDuration);
 
-            // --- Fetch template names for all users ---
-            long templateFetchStart = System.currentTimeMillis();
-            for (UserEntity user : userPage.getContent()) {
-                if (user.getTemplateId() != null) {
-                    SuperTemplate template = superTemplateRepository.findById(user.getTemplateId())
-                            .orElse(null);
-                    if (template != null) {
-                        user.setTemplateName(template.getTemplateName());
+            // --- Batch fetch template names (single query instead of N+1) ---
+            List<Long> templateIds = userPage.getContent().stream()
+                    .map(UserEntity::getTemplateId)
+                    .filter(java.util.Objects::nonNull)
+                    .distinct()
+                    .toList();
+
+            if (!templateIds.isEmpty()) {
+                Map<Long, String> templateNameMap = superTemplateRepository.findByIdIn(templateIds)
+                        .stream()
+                        .collect(Collectors.toMap(SuperTemplate::getId, SuperTemplate::getTemplateName));
+
+                for (UserEntity user : userPage.getContent()) {
+                    if (user.getTemplateId() != null) {
+                        user.setTemplateName(templateNameMap.get(user.getTemplateId()));
                     }
                 }
             }
-            long templateFetchDuration = System.currentTimeMillis() - templateFetchStart;
-            log.info("Template names fetched for {} users in {} ms", userPage.getContent().size(), templateFetchDuration);
+
+            // --- Batch fetch MAC addresses (single query instead of N+1) ---
+            List<String> userNames = userPage.getContent().stream()
+                    .map(UserEntity::getUserName)
+                    .toList();
+            Map<String, String> macMap = new java.util.HashMap<>();
+            if (!userNames.isEmpty()) {
+                userToMacRepository.findByUserNameIn(userNames).stream()
+                        .collect(java.util.stream.Collectors.groupingBy(UserToMac::getUserName))
+                        .forEach((name, macs) -> macMap.put(name,
+                                macs.stream().map(UserToMac::getOriginalMacAddress)
+                                        .collect(Collectors.joining(", "))));
+            }
 
             // --- Mapping Timing ---
             long mapStart = System.currentTimeMillis();
             List<UserResponse> users = userPage.getContent().stream()
-                    .map(this::mapToResponse)
+                    .map(user -> mapToResponse(user, macMap.get(user.getUserName())))
                     .toList();
             long mapDuration = System.currentTimeMillis() - mapStart;
             log.info("Mapping UserEntity → UserResponse for {} records took {} ms", users.size(), mapDuration);
@@ -740,19 +759,19 @@ public class UserProvisioningService {
                 enrichUserWithMacAddresses(user);
             }
 
-            // Publish to Kafka
+            // Fetch template name async while publishing to Kafka
+            CompletableFuture<String> templateNameFuture = (user.getTemplateId() != null)
+                    ? CompletableFuture.supplyAsync(() ->
+                            superTemplateRepository.findById(user.getTemplateId())
+                                    .map(SuperTemplate::getTemplateName).orElse(null))
+                    : CompletableFuture.completedFuture(null);
+
+            // Publish to Kafka (blocking — must succeed)
             publishUserUpdatedEvents(user);
-            sendUserUpdateNotification(user);
+            // Notification is best-effort, run async
+            CompletableFuture.runAsync(() -> sendUserUpdateNotification(user));
 
-            // Fetch template name
-            if (user.getTemplateId() != null) {
-                SuperTemplate template = superTemplateRepository.findById(user.getTemplateId())
-                        .orElse(null);
-                if (template != null) {
-                    user.setTemplateName(template.getTemplateName());
-                }
-            }
-
+            user.setTemplateName(templateNameFuture.join());
             UpdateUserResponse response = mapToUpdateResponse(user);
             log.info(LogMessages.USER_UPDATED, userName);
             return response;
@@ -905,7 +924,7 @@ public class UserProvisioningService {
 
             // PUBLISH USER DELETE EVENT TO KAFKA
             publishUserDeletedEvents(user);
-            sendUserDeletionNotification(user);
+            CompletableFuture.runAsync(() -> sendUserDeletionNotification(user));
 
 
             log.info("User '{}' and all related data delete events published successfully", userName);
@@ -1216,9 +1235,8 @@ public class UserProvisioningService {
             log.info("Publishing MAC DELETE event for user '{}'", userName);
             publishMacAddressDeleteEvent(userName);
 
-            // Step 2: Minimal wait - DB op is fire-and-forget direct SQL (~10ms)
-            // 100ms is more than enough buffer
-            Thread.sleep(350);
+            // Step 2: Minimal wait for DELETE to propagate via Kafka consumer
+            Thread.sleep(50);
 
             // Step 3: Publish INSERTs sequentially with tiny gap
             List<String> failedMacs = new ArrayList<>();
@@ -1232,10 +1250,7 @@ public class UserProvisioningService {
                     successCount++;
                 }
 
-                // 30ms gap is enough since DB write is direct SQL fire-and-forget
-                if (i < macList.size() - 1) {
-                    Thread.sleep(30);
-                }
+                // No inter-MAC delay needed — Kafka publish is already synchronous
             }
 
             // Step 4: Fail loudly if any MAC failed
@@ -2177,7 +2192,7 @@ public class UserProvisioningService {
 
         // Check if request_id exists for another user
         boolean requestIdExists = (boolean) asyncAdaptor.supplyAll(
-                6000L,
+                2000L,
                 () -> userRepository.existsByRequestId(request.getRequestId())
         )[0].get();
 
@@ -2477,7 +2492,7 @@ public class UserProvisioningService {
     }
 
     private UserResponse mapToResponse(UserEntity user) {
-        // Fetch MAC addresses for the user
+        // Fetch MAC addresses for the user (used for single-user lookups)
         List<UserToMac> macAddresses = userToMacRepository.findByUserName(user.getUserName());
         String macString = null;
         if (!macAddresses.isEmpty()) {
@@ -2485,7 +2500,10 @@ public class UserProvisioningService {
                     .map(UserToMac::getOriginalMacAddress)
                     .collect(Collectors.joining(", "));
         }
+        return mapToResponse(user, macString);
+    }
 
+    private UserResponse mapToResponse(UserEntity user, String macString) {
         return UserResponse.builder()
                 .userId(user.getUserId())
                 .encryptionMethod(user.getEncryptionMethod())
@@ -2574,19 +2592,19 @@ public class UserProvisioningService {
         long methodStart = System.currentTimeMillis();
 
         try {
-            // --- DB Fetch Timing ---
+            // --- DB Fetch Timing (projection query - only fetches userName column) ---
             long dbStart = System.currentTimeMillis();
-            List<UserEntity> allUsers = userRepository.findAll();
+            List<String> allUserNames = userRepository.findAllUserNames();
             long dbDuration = System.currentTimeMillis() - dbStart;
-            log.info("DB fetch for getUserList completed in {} ms with {} records", dbDuration, allUsers.size());
+            log.info("DB fetch for getUserList completed in {} ms with {} records", dbDuration, allUserNames.size());
 
             // --- Mapping Timing ---
             long mapStart = System.currentTimeMillis();
-            List<UserListResponse> userList = allUsers.stream()
-                    .map(user -> new UserListResponse(user.getUserName()))
+            List<UserListResponse> userList = allUserNames.stream()
+                    .map(UserListResponse::new)
                     .toList();
             long mapDuration = System.currentTimeMillis() - mapStart;
-            log.info("Mapping UserEntity → UserListResponse for {} usernames took {} ms", userList.size(), mapDuration);
+            log.info("Mapping userName → UserListResponse for {} usernames took {} ms", userList.size(), mapDuration);
 
             return userList;
 

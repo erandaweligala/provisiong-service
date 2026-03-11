@@ -28,13 +28,20 @@ public class RequestUuidInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        String logIdentifier = request.getHeader(yamlConfig.getLogIdentifierKey());
+        String key = yamlConfig.getLogIdentifierKey();
+        String logIdentifier = request.getHeader(key);
         if (logIdentifier != null) {
-            MDC.put(yamlConfig.getLogIdentifierKey(), logIdentifier);
+            MDC.put(key, logIdentifier);
         } else {
-            MDC.put(yamlConfig.getLogIdentifierKey(), UUID.randomUUID().toString());
+            MDC.put(key, UUID.randomUUID().toString());
         }
         return true;
+    }
+
+    @Override
+    public void afterCompletion(HttpServletRequest request, HttpServletResponse response,
+                                Object handler, Exception ex) {
+        MDC.remove(yamlConfig.getLogIdentifierKey());
     }
 
 }

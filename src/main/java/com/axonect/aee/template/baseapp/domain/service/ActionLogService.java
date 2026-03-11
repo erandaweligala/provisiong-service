@@ -25,7 +25,7 @@ public class ActionLogService {
 
     private final ActionLogRepository actionLogRepository;
 
-    @Transactional
+    @Transactional(readOnly = true)
     public PagedActionLogResponse getActionLogs(
             String action,
             String groupId,
@@ -50,7 +50,7 @@ public class ActionLogService {
                     ),
                     pageable
             );
-            log.info("Fetched action logs : {}",result);
+            log.debug("Fetched {} action logs", result.getTotalElements());
             return new PagedActionLogResponse(
                     page,
                     limit,

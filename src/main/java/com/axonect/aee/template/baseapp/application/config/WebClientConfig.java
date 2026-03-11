@@ -25,28 +25,28 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class WebClientConfig {
 
-    @Value("${cache.api.connect-timeout:5000}")
+    @Value("${cache.api.connect-timeout:3000}")
     private Integer connectTimeout;
 
-    @Value("${cache.api.read-timeout:10}")
+    @Value("${cache.api.read-timeout:5}")
     private Integer readTimeout;
 
-    @Value("${cache.api.write-timeout:10}")
+    @Value("${cache.api.write-timeout:5}")
     private Integer writeTimeout;
 
-    @Value("${cache.api.response-timeout:10}")
+    @Value("${cache.api.response-timeout:5}")
     private Integer responseTimeout;
 
     @Value("${cache.api.max-connections:100}")
     private Integer maxConnections;
 
-    @Value("${cache.api.pending-acquire-timeout:45}")
+    @Value("${cache.api.pending-acquire-timeout:10}")
     private Integer pendingAcquireTimeout;
 
-    @Value("${accounting.service.connect-timeout:5000}")
+    @Value("${accounting.service.connect-timeout:3000}")
     private int accountingConnectTimeout;
 
-    @Value("${accounting.service.read-timeout:10000}")
+    @Value("${accounting.service.read-timeout:5000}")
     private int accountingReadTimeout;
 
     // FIX #1: Inject the base URL here so it can be set on the WebClient bean
@@ -116,8 +116,8 @@ public class WebClientConfig {
                 duration);
 
         // Log warning for slow requests
-        if (duration > 5000) {
-            log.warn("[{}] SLOW REQUEST: {} {} took {}ms (threshold: 5000ms)",
+        if (duration > 400) {
+            log.warn("[{}] SLOW REQUEST: {} {} took {}ms (threshold: 400ms)",
                     requestId,
                     response.request().getMethod(),
                     response.request().getURI(),

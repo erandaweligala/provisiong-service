@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -13,4 +14,5 @@ public interface SuperTemplateRepository extends JpaRepository<SuperTemplate, Lo
     boolean existsByIsDefault(Boolean isDefault);
     SuperTemplate findByTemplateName(String templateName);
     Optional<SuperTemplate> findByIsDefault(Boolean isDefault);
+    List<SuperTemplate> findByIdIn(List<Long> ids);
 }

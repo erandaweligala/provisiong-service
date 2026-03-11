@@ -12,11 +12,11 @@ public interface UserToMacRepository extends JpaRepository<UserToMac, Long> {
 
     List<UserToMac> findByUserName(String userName);
 
-    // Case-insensitive check using LOWER function
-    @Query("SELECT COUNT(m) > 0 FROM UserToMac m WHERE LOWER(m.macAddress) = LOWER(:macAddress)")
+    // MAC addresses are stored normalized (lowercase, no separators) so no LOWER() needed
+    @Query("SELECT COUNT(m) > 0 FROM UserToMac m WHERE m.macAddress = :macAddress")
     boolean existsByMacAddress(@Param("macAddress") String macAddress);
 
-    @Query("SELECT COUNT(m) > 0 FROM UserToMac m WHERE LOWER(m.macAddress) = LOWER(:macAddress) AND m.userName != :userName")
+    @Query("SELECT COUNT(m) > 0 FROM UserToMac m WHERE m.macAddress = :macAddress AND m.userName != :userName")
     boolean existsByMacAddressAndUserNameNot(@Param("macAddress") String macAddress, @Param("userName") String userName);
 
     @Transactional
@@ -29,4 +29,6 @@ public interface UserToMacRepository extends JpaRepository<UserToMac, Long> {
 
     @Query("SELECT m FROM UserToMac m WHERE m.macAddress IN :macAddresses AND m.userName != :userName")
     List<UserToMac> findByMacAddressInAndUserNameNot(@Param("macAddresses") List<String> macAddresses, @Param("userName") String userName);
+
+    List<UserToMac> findByUserNameIn(List<String> userNames);
 }

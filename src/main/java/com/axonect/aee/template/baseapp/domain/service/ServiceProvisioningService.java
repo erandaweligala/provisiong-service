@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
@@ -193,23 +194,19 @@ public class ServiceProvisioningService {
                 );
             }
 
-            //  READ-ONLY: Check group exists
-            log.debug("Check group exists for groupId: {}", groupId);
-            UserEntity user = userRepository.findFirstByGroupId(groupId)
-                    .orElseThrow(() -> {
-                        log.error("User not found: {}", groupId);
-                        return new AAAException(LogMessages.ERROR_NOT_FOUND, "GROUP_NOT_FOUND", HttpStatus.NOT_FOUND);
-                    });
+            //  READ-ONLY: Fetch group user and plan in parallel — independent queries
+            CompletableFuture<UserEntity> userFuture = CompletableFuture.supplyAsync(() ->
+                    userRepository.findFirstByGroupId(groupId)
+                            .orElseThrow(() -> new AAAException(LogMessages.ERROR_NOT_FOUND, "GROUP_NOT_FOUND", HttpStatus.NOT_FOUND)));
+            CompletableFuture<Plan> planFuture = CompletableFuture.supplyAsync(() ->
+                    planRepository.findByPlanId(planId)
+                            .orElseThrow(() -> new AAAException(LogMessages.ERROR_NOT_FOUND, "PLAN_DOES_NOT_EXIST", HttpStatus.NOT_FOUND)));
+
+            UserEntity user = userFuture.join();
             log.debug("Group found: {}", groupId);
             validateUserStatus(user, "Group Service Activation");
 
-            //   READ-ONLY: Get plan details
-            log.debug("Fetching plan details for plan ID: {}", planId);
-            Plan plan = planRepository.findByPlanId(planId)
-                    .orElseThrow(() -> {
-                        log.error("Plan not found: {}", planId);
-                        return new AAAException(LogMessages.ERROR_NOT_FOUND, "PLAN_DOES_NOT_EXIST", HttpStatus.NOT_FOUND);
-                    });
+            Plan plan = planFuture.join();
             log.debug("Plan found: {} ({}), Recurring: {}", plan.getPlanName(), plan.getPlanType(), plan.getRecurringFlag());
 
             if (!plan.getStatus().equalsIgnoreCase(ACTIVE)) {
@@ -244,23 +241,19 @@ public class ServiceProvisioningService {
                 );
             }
 
-            //   READ-ONLY: Get user details
-            log.debug("Fetching user details for username: {}", userName);
-            UserEntity user = userRepository.findByUserName(userName)
-                    .orElseThrow(() -> {
-                        log.error("User not found: {}", userName);
-                        return new AAAException(LogMessages.ERROR_NOT_FOUND, "USER_NOT_FOUND", HttpStatus.NOT_FOUND);
-                    });
+            //   READ-ONLY: Fetch user and plan in parallel — independent queries
+            CompletableFuture<UserEntity> userFuture = CompletableFuture.supplyAsync(() ->
+                    userRepository.findByUserName(userName)
+                            .orElseThrow(() -> new AAAException(LogMessages.ERROR_NOT_FOUND, "USER_NOT_FOUND", HttpStatus.NOT_FOUND)));
+            CompletableFuture<Plan> planFuture = CompletableFuture.supplyAsync(() ->
+                    planRepository.findByPlanId(planId)
+                            .orElseThrow(() -> new AAAException(LogMessages.ERROR_NOT_FOUND, "PLAN_DOES_NOT_EXIST", HttpStatus.NOT_FOUND)));
+
+            UserEntity user = userFuture.join();
             log.debug("User found: {} with billing type: {}", userName, user.getBilling());
             validateUserStatus(user, "Individual Service Activation");
 
-            //   READ-ONLY: Get plan details
-            log.debug("Fetching plan details for plan ID: {}", planId);
-            Plan plan = planRepository.findByPlanId(planId)
-                    .orElseThrow(() -> {
-                        log.error("Plan not found: {}", planId);
-                        return new AAAException(LogMessages.ERROR_NOT_FOUND, "PLAN_DOES_NOT_EXIST", HttpStatus.NOT_FOUND);
-                    });
+            Plan plan = planFuture.join();
             log.debug("Plan found: {} ({}), Recurring: {}", plan.getPlanName(), plan.getPlanType(), plan.getRecurringFlag());
 
             if (!plan.getStatus().equalsIgnoreCase(ACTIVE)) {
