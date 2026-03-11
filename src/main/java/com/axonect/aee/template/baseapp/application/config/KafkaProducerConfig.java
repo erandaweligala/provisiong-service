@@ -119,8 +119,8 @@ public class KafkaProducerConfig {
             ConcurrentMessageListenerContainer<String, String> replyContainer) {
         ReplyingKafkaTemplate<String, Object, String> template =
                 new ReplyingKafkaTemplate<>(pf, replyContainer);
-        // Hard ceiling — must be >= publishTimeoutMs in KafkaEventPublisher (config 1)
-        template.setDefaultReplyTimeout(Duration.ofSeconds(3));
+        // Hard ceiling — must be >= publishTimeoutMs in KafkaEventPublisher
+        template.setDefaultReplyTimeout(Duration.ofMillis(2500));
         return template;
     }
 

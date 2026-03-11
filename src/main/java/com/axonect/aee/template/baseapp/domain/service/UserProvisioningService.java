@@ -397,19 +397,24 @@ public class UserProvisioningService {
             long dbDuration = System.currentTimeMillis() - dbStart;
             log.info("DB query for getAllUsers completed in {} ms", dbDuration);
 
-            // --- Fetch template names for all users ---
-            long templateFetchStart = System.currentTimeMillis();
-            for (UserEntity user : userPage.getContent()) {
-                if (user.getTemplateId() != null) {
-                    SuperTemplate template = superTemplateRepository.findById(user.getTemplateId())
-                            .orElse(null);
-                    if (template != null) {
-                        user.setTemplateName(template.getTemplateName());
+            // --- Batch fetch template names (single query instead of N+1) ---
+            List<Long> templateIds = userPage.getContent().stream()
+                    .map(UserEntity::getTemplateId)
+                    .filter(java.util.Objects::nonNull)
+                    .distinct()
+                    .toList();
+
+            if (!templateIds.isEmpty()) {
+                Map<Long, String> templateNameMap = superTemplateRepository.findByIdIn(templateIds)
+                        .stream()
+                        .collect(Collectors.toMap(SuperTemplate::getId, SuperTemplate::getTemplateName));
+
+                for (UserEntity user : userPage.getContent()) {
+                    if (user.getTemplateId() != null) {
+                        user.setTemplateName(templateNameMap.get(user.getTemplateId()));
                     }
                 }
             }
-            long templateFetchDuration = System.currentTimeMillis() - templateFetchStart;
-            log.info("Template names fetched for {} users in {} ms", userPage.getContent().size(), templateFetchDuration);
 
             // --- Mapping Timing ---
             long mapStart = System.currentTimeMillis();

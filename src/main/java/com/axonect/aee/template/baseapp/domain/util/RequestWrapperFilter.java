@@ -18,6 +18,18 @@ import java.io.IOException;
 public class RequestWrapperFilter extends OncePerRequestFilter {
 
     @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        String path = request.getRequestURI();
+        // Only wrap API paths that need body caching for logging interceptor
+        // Skip actuator, swagger, health endpoints to avoid unnecessary overhead
+        return path == null
+                || path.startsWith("/actuator")
+                || path.startsWith("/swagger")
+                || path.startsWith("/v3/api-docs")
+                || !(path.startsWith("/api/user") || path.startsWith("/api/services"));
+    }
+
+    @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain)

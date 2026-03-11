@@ -6,6 +6,15 @@ server:
     key-store-password: Pass@456Bjd  # Replace with actual password
     key-store-type: PKCS12
     key-alias: aaacsg-server  # May need to verify this
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/plain
+    min-response-size: 1024
+  tomcat:
+    max-threads: 200
+    min-spare-threads: 20
+    accept-count: 100
+    connection-timeout: 5000
 
 base-url:
   context: /axonect/aee/templates/v1.0/base-template
@@ -37,10 +46,10 @@ app:
       child-template-events: dc-provisioning
 
     publish:
-      timeout-ms: 5000
+      timeout-ms: 2000
       retry:
         enabled: true
-        max-attempts: 3
+        max-attempts: 2
       require-both-ack: false
 
 
@@ -83,15 +92,15 @@ spring:
     driver-class-name: oracle.jdbc.OracleDriver
     hikari:
       maximum-pool-size: 50
-      minimum-idle: 30
-      connection-timeout: 10000
-      idle-timeout: 3000
+      minimum-idle: 20
+      connection-timeout: 5000
+      idle-timeout: 30000
       max-lifetime: 180000
       pool-name: AAAHikariPool
       leak-detection-threshold: 60000
       data-source-properties:
-        oracle.net.CONNECT_TIMEOUT: 10000
-        oracle.jdbc.ReadTimeout: 30000
+        oracle.net.CONNECT_TIMEOUT: 5000
+        oracle.jdbc.ReadTimeout: 10000
 
   kafka:
     bootstrap-servers:
@@ -109,25 +118,25 @@ spring:
         batch.size: 32768
         linger.ms: 5
         buffer.memory: 67108864
-        delivery.timeout.ms: 300000
-        request.timeout.ms: 120000
-        max.block.ms: 60000
+        delivery.timeout.ms: 5000
+        request.timeout.ms: 2000
+        max.block.ms: 2000
 
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    show-sql: false
+    open-in-view: false
     properties:
       hibernate:
-        format_sql: true
+        format_sql: false
         dialect: org.hibernate.dialect.OracleDialect
         jdbc:
           batch_size: 20
-          fetch_size: 1000
+          fetch_size: 100
         order_inserts: true
         order_updates: true
-        connection:
-          pool_size: 200         # Add this line (matches max-pool-size)
+        generate_statistics: false
 
   autoconfigure:
     exclude:
@@ -159,22 +168,22 @@ logging:
 cache:
   api:
     base-url: http://airtel-aaa-accounting-management-service-service.airtel-aaa.svc.cluster.local:9905/api/v1/cache/addBucket/{bucketUsername}
-    connect-timeout: 5000         # Connection timeout in milliseconds
-    read-timeout: 10              # Read timeout in seconds
-    write-timeout: 10             # Write timeout in seconds
-    response-timeout: 10          # Response timeout in seconds
+    connect-timeout: 3000         # Connection timeout in milliseconds
+    read-timeout: 5               # Read timeout in seconds
+    write-timeout: 5              # Write timeout in seconds
+    response-timeout: 5           # Response timeout in seconds
     max-connections: 100          # Maximum connections in pool
-    pending-acquire-timeout: 45   # Timeout for acquiring connection from pool (seconds)
+    pending-acquire-timeout: 10   # Timeout for acquiring connection from pool (seconds)
 
     # Retry Configuration
     retry:
-      max-attempts: 3             # Maximum retry attempts
-      initial-backoff: 2          # Initial backoff in seconds
-      max-backoff: 10             # Maximum backoff in seconds
+      max-attempts: 2             # Maximum retry attempts
+      initial-backoff: 1          # Initial backoff in seconds
+      max-backoff: 3              # Maximum backoff in seconds
 
     # Request Timeout
     timeout:
-      request: 10                 # Individual request timeout in seconds
+      request: 5                  # Individual request timeout in seconds
 
 thread:
   count:

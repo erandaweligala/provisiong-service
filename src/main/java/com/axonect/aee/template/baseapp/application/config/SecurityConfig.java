@@ -4,6 +4,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
@@ -20,16 +21,11 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
-                .csrf(csrf -> csrf.disable())  // Disable CSRF for API endpoints
+                .csrf(csrf -> csrf.disable())
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .securityMatcher("/api/**")
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/user/**").permitAll()
-                        .requestMatchers("/api/services/**").permitAll() // Allow all requests to /api/user/**
-                        .requestMatchers("/api/bng/**").permitAll()
-                        .requestMatchers("/api/logs/**").permitAll()
-                        .requestMatchers("/api/vendor-configs/**").permitAll()
-                        .requestMatchers("/api/notification-templates/**").permitAll()
-                        .requestMatchers("/api/entity-metadata/**").permitAll()
-                        .anyRequest().authenticated()  // Require authentication for other endpoints
+                        .requestMatchers("/api/**").permitAll()
                 );
         return http.build();
     }
