@@ -13,7 +13,14 @@ import org.hibernate.type.SqlTypes;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "SERVICE_INSTANCE")
+@Table(name = "SERVICE_INSTANCE",
+        indexes = {
+                @Index(name = "IDX_SI_USERNAME", columnList = "USERNAME"),
+                @Index(name = "IDX_SI_PLAN_ID", columnList = "PLAN_ID"),
+                @Index(name = "IDX_SI_STATUS", columnList = "STATUS"),
+                @Index(name = "IDX_SI_USERNAME_PLANID", columnList = "USERNAME, PLAN_ID"),
+                @Index(name = "IDX_SI_USERNAME_STATUS", columnList = "USERNAME, STATUS")
+        })
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -22,7 +29,7 @@ public class ServiceInstance {
     
     @Id
     @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "service_instance_seq")
-    @SequenceGenerator(name = "service_instance_seq", sequenceName = "SERVICE_INSTANCE_SEQ", allocationSize = 1)
+    @SequenceGenerator(name = "service_instance_seq", sequenceName = "SERVICE_INSTANCE_SEQ", allocationSize = 50)
     private Long id;
     
     @Column(name = "PLAN_ID", length = 64, nullable = false)

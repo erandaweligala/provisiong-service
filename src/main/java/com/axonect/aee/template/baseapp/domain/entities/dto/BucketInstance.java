@@ -9,7 +9,11 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "BUCKET_INSTANCE")
+@Table(name = "BUCKET_INSTANCE",
+        indexes = {
+                @Index(name = "IDX_BI_SERVICE_ID", columnList = "SERVICE_ID"),
+                @Index(name = "IDX_BI_SERVICE_PRIORITY", columnList = "SERVICE_ID, PRIORITY")
+        })
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -17,7 +21,7 @@ public class BucketInstance {
 
     @Id
     @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "bucket_instance_seq")
-    @SequenceGenerator(name = "bucket_instance_seq", sequenceName = "BUCKET_INSTANCE_SEQ", allocationSize = 1)
+    @SequenceGenerator(name = "bucket_instance_seq", sequenceName = "BUCKET_INSTANCE_SEQ", allocationSize = 50)
     private Long id;
 
     @Column(name = "BUCKET_ID", nullable = false, length = 64)

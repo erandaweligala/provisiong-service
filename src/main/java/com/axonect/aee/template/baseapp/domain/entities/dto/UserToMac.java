@@ -8,7 +8,11 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "AAA_USER_MAC_ADDRESS")
+@Table(name = "AAA_USER_MAC_ADDRESS",
+        indexes = {
+                @Index(name = "IDX_MAC_USERNAME", columnList = "USER_NAME"),
+                @Index(name = "IDX_MAC_ADDRESS", columnList = "MAC_ADDRESS")
+        })
 @Getter
 @Setter
 @NoArgsConstructor
@@ -18,7 +22,7 @@ public class UserToMac {
 
     @Id
     @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "mac_seq")
-    @SequenceGenerator(name = "mac_seq", sequenceName = "AAA_USER_MAC_SEQ", allocationSize = 1)
+    @SequenceGenerator(name = "mac_seq", sequenceName = "AAA_USER_MAC_SEQ", allocationSize = 50)
     @Column(name = "ID")
     private Long id;
 

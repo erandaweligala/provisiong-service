@@ -10,7 +10,13 @@ import java.time.LocalDateTime;
 import java.util.Random;
 
 @Entity
-@Table(name = "AAA_USER")
+@Table(name = "AAA_USER",
+        indexes = {
+                @Index(name = "IDX_USER_GROUP_ID", columnList = "GROUP_ID"),
+                @Index(name = "IDX_USER_TEMPLATE_ID", columnList = "TEMPLATE_ID"),
+                @Index(name = "IDX_USER_STATUS", columnList = "STATUS"),
+                @Index(name = "IDX_USER_USERNAME", columnList = "USER_NAME")
+        })
 @Getter
 @Setter
 @NoArgsConstructor
