@@ -226,7 +226,7 @@ cache:
 accounting:
   service:
     # Base URL for the Quarkus accounting service (Kubernetes service DNS)
-    url: http://airtel-aaa-accounting-management-service-service.airtel-aaa.svc.cluster.local:9905
+    url: http://airtel-aaa-accounting-management-service-service.airtel-aaa.svc.cluster.local:9905/api/v1/cache/
 
     # Enable/disable CoA requests (set to false during maintenance or testing)
     enabled: true

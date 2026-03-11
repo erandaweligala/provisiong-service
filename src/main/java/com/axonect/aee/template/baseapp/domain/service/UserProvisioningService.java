@@ -627,7 +627,7 @@ public class UserProvisioningService {
 
     public ServiceLineResponse getServiceDetailsByUsername(String userName) {
         long start = System.currentTimeMillis();
-        try{
+        try {
             ServiceLineResponse response = new ServiceLineResponse();
             UserEntity user = userRepository.findByUserName(userName)
                     .orElseThrow(() -> new AAAException(
@@ -639,32 +639,34 @@ public class UserProvisioningService {
             response.setServiceLineNumber(user.getUserName());
             response.setCategory(String.valueOf(user.getSubscription()));
             response.setCurrentStatus(user.getStatus() != null ? String.valueOf(user.getStatus().getCode()) : null);
+
             List<String> userNameList = new ArrayList<>();
             userNameList.add(userName);
-            if (!user.getGroupId().equalsIgnoreCase("1")){
+            if (!user.getGroupId().equalsIgnoreCase("1")) {
                 userNameList.add(user.getGroupId());
             }
+
             List<BucketFlatProjection> bucketSummaryList = bucketInstanceRepository.findFlatBucketDetailsByUsernames(userNameList);
             List<Plan> planSummaryList = mapPlanSummaryList(bucketSummaryList);
             response.setPlans(planSummaryList);
-            log.info(LogMessages.SERVICE_TERMINATION,System.currentTimeMillis()-start,"User Service Summary Retrieved Successfully");
+
+            log.info(LogMessages.SERVICE_TERMINATION, System.currentTimeMillis() - start, "User Service Summary Retrieved Successfully");
             return response;
         } catch (AAAException e) {
             throw e;
-        }catch (Exception ex){
-            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR,ex.getMessage(),HttpStatus.INTERNAL_SERVER_ERROR);
+        } catch (Exception ex) {
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, ex.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
     private List<Plan> mapPlanSummaryList(List<BucketFlatProjection> bucketSummaryList) {
-
         return bucketSummaryList.stream()
                 .map(bucket -> Plan.builder()
                         .planName(bucket.getPlanName())
                         .priority(bucket.getPriority() != null
                                 ? bucket.getPriority().intValue()
                                 : null)
-                        .status(bucket.getServiceStatus())
+                        .status(mapStatusToCode(bucket.getServiceStatus()))   // mapped to integer
                         .planType(bucket.getPlanType())
                         .recurringMode(bucket.getRecurringPeriod())
                         .isGroup(bucket.getIsGroup())
@@ -682,6 +684,16 @@ public class UserProvisioningService {
                                 .build())
                         .build())
                 .collect(Collectors.toList());
+    }
+
+    private Integer mapStatusToCode(String status) {
+        if (status == null) return null;
+        return switch (status.toLowerCase()) {
+            case "active"   -> 1;
+            case "draft"    -> 2;
+            case "inactive" -> 3;
+            default         -> null;
+        };
     }
 
 /* ---------------------------------------------------

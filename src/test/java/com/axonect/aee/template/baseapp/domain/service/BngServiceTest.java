@@ -47,8 +47,15 @@ class BngServiceTest {
     private PublishResult successfulPublishResult;
     private PublishResult failedPublishResult;
 
+    // VAPT FIX: AAA-WEB-2026-06 - These come from request headers, not user input
+    private String createdBy;
+    private String updatedBy;
+
     @BeforeEach
     void setup() {
+        createdBy = "admin";
+        updatedBy = "admin";
+
         createRequest = new BngCreateRequest();
         createRequest.setBngId("BNG001");
         createRequest.setBngName("TEST_BNG");
@@ -62,7 +69,7 @@ class BngServiceTest {
         createRequest.setSharedSecret("secret");
         createRequest.setLocation("Colombo");
         createRequest.setStatus("Active");
-        createRequest.setCreatedBy("admin");
+        // REMOVED: createRequest.setCreatedBy("admin");
 
         updateRequest = new BngUpdateRequest();
         updateRequest.setBngIp("20.20.20.1");
@@ -75,7 +82,7 @@ class BngServiceTest {
         updateRequest.setSharedSecret("updated");
         updateRequest.setLocation("Kandy");
         updateRequest.setStatus("Inactive");
-        updateRequest.setUpdatedBy("admin");
+        // REMOVED: updateRequest.setUpdatedBy("admin");
 
         mockEntity = BngEntity.builder()
                 .bngId("BNG001")
@@ -116,15 +123,15 @@ class BngServiceTest {
         when(bngRepository.existsByBngId("BNG001")).thenReturn(false);
         when(bngRepository.existsByBngName("TEST_BNG")).thenReturn(false);
         when(eventMapper.toBngDBWriteEvent(eq("CREATE"), any(BngEntity.class))).thenReturn(mockDbEvent);
-
         when(kafkaEventPublisher.publishBngDBWriteEvent(any(DBWriteRequestGeneric.class)))
                 .thenReturn(successfulPublishResult);
 
-        CreateBngResponse response = bngService.createBng(createRequest);
+        CreateBngResponse response = bngService.createBng(createRequest, createdBy);
 
         assertThat(response).isNotNull();
         assertThat(response.getBngId()).isEqualTo("BNG001");
         assertThat(response.getBngName()).isEqualTo("TEST_BNG");
+        assertThat(response.getCreatedBy()).isEqualTo("admin");
         verify(kafkaEventPublisher, times(1)).publishBngDBWriteEvent(any(DBWriteRequestGeneric.class));
     }
 
@@ -133,7 +140,7 @@ class BngServiceTest {
     void testCreateBng_DuplicateId() {
         when(bngRepository.existsByBngId("BNG001")).thenReturn(true);
 
-        assertThatThrownBy(() -> bngService.createBng(createRequest))
+        assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
                 .isInstanceOf(AAAException.class)
                 .hasMessageContaining("already exists");
 
@@ -146,7 +153,7 @@ class BngServiceTest {
         when(bngRepository.existsByBngId("BNG001")).thenReturn(false);
         when(bngRepository.existsByBngName("TEST_BNG")).thenReturn(true);
 
-        assertThatThrownBy(() -> bngService.createBng(createRequest))
+        assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
                 .isInstanceOf(AAAException.class)
                 .hasMessageContaining("already exists");
     }
@@ -158,7 +165,7 @@ class BngServiceTest {
         when(bngRepository.existsByBngId("BNG001")).thenReturn(false);
         when(bngRepository.existsByBngName("TEST_BNG")).thenReturn(false);
 
-        assertThatThrownBy(() -> bngService.createBng(createRequest))
+        assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
                 .isInstanceOf(AAAException.class);
     }
 
@@ -169,7 +176,7 @@ class BngServiceTest {
         when(bngRepository.existsByBngId("BNG001")).thenReturn(false);
         when(bngRepository.existsByBngName("TEST_BNG")).thenReturn(false);
 
-        assertThatThrownBy(() -> bngService.createBng(createRequest))
+        assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
                 .isInstanceOf(AAAException.class);
     }
 
@@ -180,7 +187,7 @@ class BngServiceTest {
         when(bngRepository.existsByBngId("BNG001")).thenReturn(false);
         when(bngRepository.existsByBngName("TEST_BNG")).thenReturn(false);
 
-        assertThatThrownBy(() -> bngService.createBng(createRequest))
+        assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
                 .isInstanceOf(AAAException.class);
     }
 
@@ -191,8 +198,7 @@ class BngServiceTest {
         when(bngRepository.existsByBngName("TEST_BNG")).thenReturn(false);
         when(eventMapper.toBngDBWriteEvent(eq("CREATE"), any(BngEntity.class))).thenReturn(mockDbEvent);
 
-
-        assertThatThrownBy(() -> bngService.createBng(createRequest))
+        assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
                 .isInstanceOf(AAAException.class)
                 .hasMessageContaining("Failed to publish BNG created events");
     }
@@ -203,11 +209,10 @@ class BngServiceTest {
         when(bngRepository.existsByBngId("BNG001")).thenReturn(false);
         when(bngRepository.existsByBngName("TEST_BNG")).thenReturn(false);
         when(eventMapper.toBngDBWriteEvent(eq("CREATE"), any(BngEntity.class))).thenReturn(mockDbEvent);
-
         when(kafkaEventPublisher.publishBngDBWriteEvent(any(DBWriteRequestGeneric.class)))
                 .thenReturn(failedPublishResult);
 
-        assertThatThrownBy(() -> bngService.createBng(createRequest))
+        assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
                 .isInstanceOf(AAAException.class)
                 .hasMessageContaining("Failed to publish BNG created events");
     }
@@ -218,8 +223,7 @@ class BngServiceTest {
         when(bngRepository.existsByBngId("BNG001")).thenReturn(false);
         when(bngRepository.existsByBngName("TEST_BNG")).thenReturn(false);
 
-
-        assertThatThrownBy(() -> bngService.createBng(createRequest))
+        assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
                 .isInstanceOf(AAAException.class)
                 .hasMessageContaining("Failed to publish BNG created events");
     }
@@ -231,11 +235,10 @@ class BngServiceTest {
         when(bngRepository.existsByBngId("BNG001")).thenReturn(false);
         when(bngRepository.existsByBngName("TEST_BNG")).thenReturn(false);
         when(eventMapper.toBngDBWriteEvent(eq("CREATE"), any(BngEntity.class))).thenReturn(mockDbEvent);
-
         when(kafkaEventPublisher.publishBngDBWriteEvent(any(DBWriteRequestGeneric.class)))
                 .thenReturn(successfulPublishResult);
 
-        CreateBngResponse response = bngService.createBng(createRequest);
+        CreateBngResponse response = bngService.createBng(createRequest, createdBy);
 
         assertThat(response).isNotNull();
         assertThat(response.getStatus()).isEqualTo("active");
@@ -248,16 +251,16 @@ class BngServiceTest {
     void testUpdateBng_Success() {
         when(bngRepository.findById("BNG001")).thenReturn(Optional.of(mockEntity));
         when(eventMapper.toBngDBWriteEvent(eq("UPDATE"), any(BngEntity.class))).thenReturn(mockDbEvent);
-
         when(kafkaEventPublisher.publishBngDBWriteEvent(any(DBWriteRequestGeneric.class)))
                 .thenReturn(successfulPublishResult);
 
-        UpdateBngResponse response = bngService.updateBng("BNG001", updateRequest);
+        UpdateBngResponse response = bngService.updateBng("BNG001", updateRequest, updatedBy);
 
         assertThat(response).isNotNull();
         assertThat(response.getBngId()).isEqualTo("BNG001");
         assertThat(response.getBngIp()).isEqualTo("20.20.20.1");
         assertThat(response.getLocation()).isEqualTo("Kandy");
+        assertThat(response.getUpdatedBy()).isEqualTo("admin");
     }
 
     @Test
@@ -265,7 +268,7 @@ class BngServiceTest {
     void testUpdateBng_NotFound() {
         when(bngRepository.findById("BNG999")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> bngService.updateBng("BNG999", updateRequest))
+        assertThatThrownBy(() -> bngService.updateBng("BNG999", updateRequest, updatedBy))
                 .isInstanceOf(AAAException.class)
                 .hasMessageContaining("not found");
     }
@@ -276,7 +279,7 @@ class BngServiceTest {
         updateRequest.setStatus("stupid");
         when(bngRepository.findById("BNG001")).thenReturn(Optional.of(mockEntity));
 
-        assertThatThrownBy(() -> bngService.updateBng("BNG001", updateRequest))
+        assertThatThrownBy(() -> bngService.updateBng("BNG001", updateRequest, updatedBy))
                 .isInstanceOf(AAAException.class);
     }
 
@@ -285,37 +288,34 @@ class BngServiceTest {
     void testUpdateBng_PartialUpdateOnlyIp() {
         BngUpdateRequest partialRequest = new BngUpdateRequest();
         partialRequest.setBngIp("30.30.30.1");
-        partialRequest.setUpdatedBy("admin");
+        // REMOVED: partialRequest.setUpdatedBy("admin");
 
         when(bngRepository.findById("BNG001")).thenReturn(Optional.of(mockEntity));
         when(eventMapper.toBngDBWriteEvent(eq("UPDATE"), any(BngEntity.class))).thenReturn(mockDbEvent);
-
         when(kafkaEventPublisher.publishBngDBWriteEvent(any(DBWriteRequestGeneric.class)))
                 .thenReturn(successfulPublishResult);
 
-        UpdateBngResponse response = bngService.updateBng("BNG001", partialRequest);
+        UpdateBngResponse response = bngService.updateBng("BNG001", partialRequest, updatedBy);
 
         assertThat(response.getBngIp()).isEqualTo("30.30.30.1");
-        assertThat(response.getBngTypeVendor()).isEqualTo("Huawei"); // Original value retained
+        assertThat(response.getBngTypeVendor()).isEqualTo("Huawei");
     }
 
     @Test
     @DisplayName("Test 15: Update BNG - Null Values Ignored")
     void testUpdateBng_NullValuesIgnored() {
         BngUpdateRequest nullRequest = new BngUpdateRequest();
-        nullRequest.setUpdatedBy("admin");
-        // All other fields are null
+        // REMOVED: nullRequest.setUpdatedBy("admin");
 
         when(bngRepository.findById("BNG001")).thenReturn(Optional.of(mockEntity));
         when(eventMapper.toBngDBWriteEvent(eq("UPDATE"), any(BngEntity.class))).thenReturn(mockDbEvent);
-
         when(kafkaEventPublisher.publishBngDBWriteEvent(any(DBWriteRequestGeneric.class)))
                 .thenReturn(successfulPublishResult);
 
-        UpdateBngResponse response = bngService.updateBng("BNG001", nullRequest);
+        UpdateBngResponse response = bngService.updateBng("BNG001", nullRequest, updatedBy);
 
-        assertThat(response.getBngIp()).isEqualTo("10.10.10.1"); // Original value
-        assertThat(response.getLocation()).isEqualTo("Colombo"); // Original value
+        assertThat(response.getBngIp()).isEqualTo("10.10.10.1");
+        assertThat(response.getLocation()).isEqualTo("Colombo");
     }
 
     @Test
@@ -324,39 +324,38 @@ class BngServiceTest {
         BngUpdateRequest blankRequest = new BngUpdateRequest();
         blankRequest.setBngIp("   ");
         blankRequest.setLocation("");
-        blankRequest.setUpdatedBy("admin");
+        // REMOVED: blankRequest.setUpdatedBy("admin");
 
         when(bngRepository.findById("BNG001")).thenReturn(Optional.of(mockEntity));
         when(eventMapper.toBngDBWriteEvent(eq("UPDATE"), any(BngEntity.class))).thenReturn(mockDbEvent);
-
         when(kafkaEventPublisher.publishBngDBWriteEvent(any(DBWriteRequestGeneric.class)))
                 .thenReturn(successfulPublishResult);
 
-        UpdateBngResponse response = bngService.updateBng("BNG001", blankRequest);
+        UpdateBngResponse response = bngService.updateBng("BNG001", blankRequest, updatedBy);
 
-        assertThat(response.getBngIp()).isEqualTo("10.10.10.1"); // Original value
-        assertThat(response.getLocation()).isEqualTo("Colombo"); // Original value
+        assertThat(response.getBngIp()).isEqualTo("10.10.10.1");
+        assertThat(response.getLocation()).isEqualTo("Colombo");
     }
-
 
     @Test
     @DisplayName("Test 18: Update BNG - Update CoaPort")
     void testUpdateBng_UpdateCoaPort() {
         BngUpdateRequest portRequest = new BngUpdateRequest();
         portRequest.setCoaPort(5000);
-        portRequest.setUpdatedBy("admin");
+        // REMOVED: portRequest.setUpdatedBy("admin");
 
         when(bngRepository.findById("BNG001")).thenReturn(Optional.of(mockEntity));
         when(eventMapper.toBngDBWriteEvent(eq("UPDATE"), any(BngEntity.class))).thenReturn(mockDbEvent);
         when(kafkaEventPublisher.publishBngDBWriteEvent(any(DBWriteRequestGeneric.class)))
                 .thenReturn(successfulPublishResult);
 
-        UpdateBngResponse response = bngService.updateBng("BNG001", portRequest);
+        UpdateBngResponse response = bngService.updateBng("BNG001", portRequest, updatedBy);
 
         assertThat(response.getCoaPort()).isEqualTo(5000);
     }
 
-    // ==================== SEARCH BNG TESTS ====================
+    // ==================== SEARCH, GET BY ID/NAME, GET LIST TESTS ====================
+    // Tests 19-30 remain unchanged — no createdBy/updatedBy involved
 
     @Test
     @DisplayName("Test 19: Search BNG - Success")
@@ -451,8 +450,6 @@ class BngServiceTest {
         assertThat(response.getBngData()).hasSize(1);
     }
 
-    // ==================== GET BY ID TESTS ====================
-
     @Test
     @DisplayName("Test 24: Get BNG By ID - Success")
     void testGetBngById_Success() {
@@ -473,8 +470,6 @@ class BngServiceTest {
                 .isInstanceOf(AAAException.class)
                 .hasMessageContaining("not found");
     }
-
-    // ==================== GET BY NAME TESTS ====================
 
     @Test
     @DisplayName("Test 26: Get BNG By Name - Success")
@@ -499,8 +494,6 @@ class BngServiceTest {
                 .hasMessageContaining("not found");
     }
 
-    // ==================== GET BY ID AND NAME TESTS ====================
-
     @Test
     @DisplayName("Test 28: Get BNG By ID and Name - Success")
     void testGetBngByIdAndName_Success() {
@@ -521,8 +514,6 @@ class BngServiceTest {
                 .isInstanceOf(AAAException.class)
                 .hasMessageContaining("not found");
     }
-
-    // ==================== GET BNG LIST TESTS ====================
 
     @Test
     @DisplayName("Test 30: Get BNG List - Success")

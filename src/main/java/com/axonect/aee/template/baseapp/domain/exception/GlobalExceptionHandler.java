@@ -89,8 +89,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<Map<String, Object>> handleJsonParseError(HttpMessageNotReadableException ex) {
 
-        String message = "Invalid request body. Please check JSON types. " +
-                "Fields 'status' and 'concurrency' must be integers.";
+        String message = "Invalid request body. Please check JSON types.";
 
         Map<String, Object> response = new HashMap<>();
         response.put("success", false);

@@ -24,7 +24,4 @@ public class BngUpdateRequest {
     private String sharedSecret;
     private String location;
     private String status;
-
-    @NotBlank(message = "UpdatedBy is mandatory")
-    private String updatedBy;
 }

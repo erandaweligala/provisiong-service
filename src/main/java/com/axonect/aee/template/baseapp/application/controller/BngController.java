@@ -7,7 +7,9 @@ import com.axonect.aee.template.baseapp.application.transport.request.entities.P
 import com.axonect.aee.template.baseapp.application.transport.response.transformers.*;
 import com.axonect.aee.template.baseapp.domain.service.BngService;
 import com.axonect.aee.template.baseapp.domain.service.PingService;
+import com.axonect.aee.template.baseapp.domain.util.Constants;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -40,8 +42,12 @@ public class BngController {
      * @return ResponseEntity containing API response with created BNG.
      */
     @PostMapping
-    public ResponseEntity<ApiResponse> createBng(@Valid @RequestBody BngCreateRequest request) {
-        CreateBngResponse response = bngService.createBng(request);
+    public ResponseEntity<ApiResponse> createBng(
+            @Valid @RequestBody BngCreateRequest request,
+            HttpServletRequest httpServletRequest) {
+
+        String createdBy = httpServletRequest.getHeader("userId");
+        CreateBngResponse response = bngService.createBng(request, createdBy);
 
         return ResponseEntity.ok(
                 new ApiResponse(true, "BNG created successfully", response)
@@ -59,9 +65,11 @@ public class BngController {
     @PutMapping("/{bng_id}")
     public ResponseEntity<ApiResponse> updateBng(
             @PathVariable("bng_id") String bngId,
-            @Valid @RequestBody BngUpdateRequest request) {
+            @Valid @RequestBody BngUpdateRequest request,
+            HttpServletRequest httpServletRequest) {
 
-        UpdateBngResponse response = bngService.updateBng(bngId, request);
+        String updatedBy = httpServletRequest.getHeader("userId");
+        UpdateBngResponse response = bngService.updateBng(bngId, request, updatedBy);
 
         return ResponseEntity.ok(
                 new ApiResponse(true, "BNG updated successfully", response)

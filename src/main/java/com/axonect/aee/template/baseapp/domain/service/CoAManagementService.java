@@ -62,6 +62,7 @@ public class CoAManagementService {
 
         // IMPORTANT: Skip if old status is INACTIVE (status code 3)
         // We don't send CoA for transitions FROM inactive state
+        // CORRECT: Only skip transitions FROM INACTIVE
         if (oldStatus == UserStatus.INACTIVE) {
             log.info("User '{}' transitioning FROM INACTIVE to {}. No CoA request needed.",
                     userName, newStatus);

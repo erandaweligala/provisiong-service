@@ -21,7 +21,7 @@ public class Plan {
     private Integer priority;
 
     @JsonProperty("status")
-    private String status;
+    private Integer status;
 
     @JsonProperty("plan_type")
     private String planType;

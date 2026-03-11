@@ -48,7 +48,4 @@ public class BngCreateRequest {
 
     @NotBlank(message = "status is mandatory")
     private String status;
-
-    @NotBlank(message = "CreatedBy is mandatory")
-    private String createdBy;
 }

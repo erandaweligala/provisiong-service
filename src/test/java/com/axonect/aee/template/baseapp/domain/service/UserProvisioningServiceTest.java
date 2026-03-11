@@ -359,21 +359,43 @@ class UserProvisioningServiceTest {
     @Test
     @DisplayName("Create User - Kafka complete failure")
     void createUser_KafkaFailure() throws Exception {
+        // Arrange - async validation passes (no duplicates)
         setupAsyncValidation(false, false);
+
+        // Template validation passes
         when(superTemplateRepository.existsById(1L)).thenReturn(true);
         when(superTemplateRepository.findById(1L)).thenReturn(Optional.of(testTemplate));
-        when(encryptionPlugin.hashMd5(anyString())).thenReturn("hash");
 
-        // Setup Kafka to fail completely
+        // Password hashing passes
+        when(encryptionPlugin.hashMd5(anyString())).thenReturn("hashedPassword");
+
+        // EventMapper returns a non-null event
+        DBWriteRequestGeneric mockEvent = DBWriteRequestGeneric.builder()
+                .eventType("CREATE")
+                .tableName("AAA_USER")
+                .build();
         when(eventMapper.toDBWriteEvent(anyString(), any(), anyString()))
-                .thenReturn(new DBWriteRequestGeneric());
-        when(kafkaEventPublisher.publishDBWriteEvent(any()))
-                .thenReturn(PublishResult.builder().dcSuccess(false).drSuccess(false).build());
+                .thenReturn(mockEvent);
 
+        // *** THE FIX: dcError must be non-null so AAAException.getMessage() isn't null ***
+        PublishResult completeFailure = PublishResult.builder()
+                .dcSuccess(false)
+                .drSuccess(false)
+                .dcError("Failed to publish user creation event to Kafka")
+                .build();
+        when(kafkaEventPublisher.publishDBWriteEvent(any()))
+                .thenReturn(completeFailure);
+
+        // Act
         AAAException exception = assertThrows(AAAException.class, () ->
                 userProvisioningService.createUser(validCreateRequest));
 
-        assertTrue(exception.getMessage().contains("Failed to publish"));
+        // Assert
+        assertNotNull(exception.getMessage(), "Exception message must not be null");
+        assertTrue(
+                exception.getMessage().contains("Failed to publish"),
+                "Expected message to contain 'Failed to publish' but was: " + exception.getMessage()
+        );
     }
 
     @Test
@@ -2238,7 +2260,7 @@ class UserProvisioningServiceTest {
         Plan plan = response.getPlans().get(0);
         assertEquals("Unlimited Plan", plan.getPlanName());
         assertEquals(1, plan.getPriority());
-        assertEquals("ACTIVE", plan.getStatus());
+        assertEquals(1, plan.getStatus());
         assertEquals("DATA", plan.getPlanType());
         assertEquals("MONTHLY", plan.getRecurringMode());
         assertTrue(plan.getIsGroup());

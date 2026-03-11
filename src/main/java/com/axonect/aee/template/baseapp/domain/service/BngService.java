@@ -7,7 +7,6 @@ import com.axonect.aee.template.baseapp.application.transport.request.entities.B
 import com.axonect.aee.template.baseapp.application.transport.request.entities.BngUpdateRequest;
 import com.axonect.aee.template.baseapp.application.transport.response.transformers.*;
 import com.axonect.aee.template.baseapp.domain.entities.dto.BngEntity;
-import com.axonect.aee.template.baseapp.domain.events.BngEvent;
 import com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric;
 import com.axonect.aee.template.baseapp.domain.events.EventMapper;
 import com.axonect.aee.template.baseapp.domain.events.PublishResult;
@@ -54,7 +53,7 @@ public class BngService {
     private final EventMapper eventMapper;
 
     @Transactional
-    public CreateBngResponse createBng(BngCreateRequest request) {
+    public CreateBngResponse createBng(BngCreateRequest request, String createdBy) {
         MDC.put(BNG_NAME_KEY, request.getBngName());
         MDC.put(BNG_ID_KEY, request.getBngId());
 
@@ -66,7 +65,7 @@ public class BngService {
             validateStatus(request.getStatus());
 
             // Build BNG entity without saving to DB
-            BngEntity bngEntity = mapToEntity(request);
+            BngEntity bngEntity = mapToEntity(request,createdBy);
             bngEntity.setCreatedDate(LocalDateTime.now());
 
             // Publish to Kafka instead of saving to DB
@@ -85,7 +84,7 @@ public class BngService {
     }
 
     @Transactional
-    public UpdateBngResponse updateBng(String bngId, BngUpdateRequest request) {
+    public UpdateBngResponse updateBng(String bngId, BngUpdateRequest request, String updatedBy) {
         MDC.put(BNG_ID_KEY, bngId);
 
         try {
@@ -104,7 +103,7 @@ public class BngService {
             // Apply updates
             validateAndApplyUpdates(bng, request);
             bng.setUpdatedDate(LocalDateTime.now());
-            bng.setUpdatedBy(request.getUpdatedBy());
+            bng.setUpdatedBy(updatedBy);
 
             // Publish to Kafka instead of saving to DB
             publishBngUpdatedEvents(bng);
@@ -363,7 +362,7 @@ public class BngService {
         }
     }
 
-    private BngEntity mapToEntity(BngCreateRequest request) {
+    private BngEntity mapToEntity(BngCreateRequest request, String username) {
         return BngEntity.builder()
                 .bngId(request.getBngId())
                 .bngName(request.getBngName())
@@ -377,7 +376,7 @@ public class BngService {
                 .sharedSecret(request.getSharedSecret())
                 .location(request.getLocation())
                 .status(request.getStatus())
-                .createdBy(request.getCreatedBy())
+                .createdBy(username)
                 .build();
     }
 
