@@ -60,11 +60,22 @@ public class VendorConfigService {
             log.debug("Starting vendor config creation for vendorId: {}, attributeName: {}",
                     request.getVendorId(), request.getAttributeName());
 
-            // -------------------------------
-            //   DUPLICATE VALIDATION
-            // -------------------------------
-            validateDuplicateAttributeIdForVendor(request);
-            validateDuplicateAttributeNameForVendor(request);
+            // Run duplicate checks in parallel — independent DB queries
+            java.util.concurrent.CompletableFuture<Boolean> attrIdExists = java.util.concurrent.CompletableFuture.supplyAsync(
+                    () -> repository.existsByVendorIdAndAttributeId(request.getVendorId(), request.getAttributeId()));
+            java.util.concurrent.CompletableFuture<Boolean> attrNameExists = java.util.concurrent.CompletableFuture.supplyAsync(
+                    () -> repository.existsByVendorIdAndAttributeName(request.getVendorId(), request.getAttributeName()));
+
+            if (attrIdExists.join()) {
+                throw new AAAException("VENDOR_CONFIG_DUPLICATE_ATTRIBUTE_ID_CODE",
+                        String.format("Attribute ID '%s' already exists for vendor '%s'",
+                                request.getAttributeId(), request.getVendorId()), HttpStatus.CONFLICT);
+            }
+            if (attrNameExists.join()) {
+                throw new AAAException("VENDOR_CONFIG_DUPLICATE_ATTRIBUTE_NAME_CODE",
+                        String.format("Attribute name '%s' already exists for vendor '%s'",
+                                request.getAttributeName(), request.getVendorId()), HttpStatus.CONFLICT);
+            }
 
             // Build VendorConfig entity without saving to DB
             VendorConfig entity = mapRequestToEntity(request);

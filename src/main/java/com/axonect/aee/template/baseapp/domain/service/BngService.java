@@ -28,6 +28,7 @@ import org.slf4j.MDC;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 @RequiredArgsConstructor
@@ -60,9 +61,24 @@ public class BngService {
         try {
             log.info(LogMessages.BNG_CREATING, request.getBngName(), request.getBngId());
 
-            validateDuplicateBngId(request);
-            validateDuplicateBngName(request);
+            // Run duplicate checks in parallel — independent DB queries
+            CompletableFuture<Boolean> idExists = CompletableFuture.supplyAsync(
+                    () -> bngRepository.existsByBngId(request.getBngId()));
+            CompletableFuture<Boolean> nameExists = CompletableFuture.supplyAsync(
+                    () -> bngRepository.existsByBngName(request.getBngName()));
+
             validateStatus(request.getStatus());
+
+            if (idExists.join()) {
+                log.warn(LogMessages.BNG_DUPLICATE_ID, request.getBngId());
+                throw new AAAException(LogMessages.BNG_DUPLICATE,
+                        "BNG ID '" + request.getBngId() + "'" + ALREADY_EXIST, HttpStatus.CONFLICT);
+            }
+            if (nameExists.join()) {
+                log.warn(LogMessages.BNG_DUPLICATE_NAME, request.getBngName());
+                throw new AAAException(LogMessages.BNG_DUPLICATE,
+                        "BNG name '" + request.getBngName() + "'" + ALREADY_EXIST, HttpStatus.CONFLICT);
+            }
 
             // Build BNG entity without saving to DB
             BngEntity bngEntity = mapToEntity(request,createdBy);
@@ -133,8 +149,7 @@ public class BngService {
             DBWriteRequestGeneric dbEvent = eventMapper.toBngDBWriteEvent(CREATE, bng);
             PublishResult dbResult = kafkaEventPublisher.publishBngDBWriteEvent(dbEvent);
 
-            // Check if both events published successfully
-            if (dbResult.isCompleteFailure() || dbResult.isCompleteFailure()) {
+            if (dbResult.isCompleteFailure()) {
                 log.error("Complete failure publishing BNG creation events for BNG '{}'", bng.getBngId());
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
@@ -143,9 +158,8 @@ public class BngService {
                 );
             }
 
-            // Log warnings if one cluster failed
-            if (!dbResult.isDcSuccess() || !dbResult.isDcSuccess()) {
-                log.warn("Failed to publish some BNG creation events to DC cluster for BNG '{}'", bng.getBngId());
+            if (!dbResult.isDcSuccess()) {
+                log.warn("Failed to publish BNG creation events to DC cluster for BNG '{}'", bng.getBngId());
             }
 
         } catch (Exception e) {

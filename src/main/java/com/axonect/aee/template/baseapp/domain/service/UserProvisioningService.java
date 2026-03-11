@@ -160,9 +160,10 @@ public class UserProvisioningService {
                 superTemplateRepository.findById(user.getTemplateId()).ifPresent(template -> user.setTemplateName(template.getTemplateName()));
             }
 
-            //  PUBLISH TO KAFKA
+            //  PUBLISH TO KAFKA (blocking — must succeed)
             publishUserCreatedEvents(user);
-            sendUserCreationNotification(user);
+            // Notification is best-effort, run async
+            CompletableFuture.runAsync(() -> sendUserCreationNotification(user));
 
 
             MDC.put(USERID, user.getUserId());
@@ -328,23 +329,23 @@ public class UserProvisioningService {
                             HttpStatus.NOT_FOUND
                     ));
 
-            // Fetch MAC addresses
-            List<UserToMac> macAddresses = userToMacRepository.findByUserName(userName);
-            if (!macAddresses.isEmpty()) {
-                String macString = macAddresses.stream()
-                        .map(UserToMac::getOriginalMacAddress)
-                        .collect(Collectors.joining(", "));
-                user.setMacAddress(macString);
-            }
+            // Fetch MAC addresses and template in parallel — they are independent
+            CompletableFuture<List<UserToMac>> macFuture = CompletableFuture.supplyAsync(
+                    () -> userToMacRepository.findByUserName(userName));
 
-            // Fetch template if exists
-            if (user.getTemplateId() != null) {
-                SuperTemplate template = superTemplateRepository.findById(user.getTemplateId())
-                        .orElse(null);
-                if (template != null) {
-                    user.setTemplateName(template.getTemplateName());
-                }
+            CompletableFuture<String> templateFuture = (user.getTemplateId() != null)
+                    ? CompletableFuture.supplyAsync(() ->
+                            superTemplateRepository.findById(user.getTemplateId())
+                                    .map(SuperTemplate::getTemplateName).orElse(null))
+                    : CompletableFuture.completedFuture(null);
+
+            List<UserToMac> macAddresses = macFuture.join();
+            if (!macAddresses.isEmpty()) {
+                user.setMacAddress(macAddresses.stream()
+                        .map(UserToMac::getOriginalMacAddress)
+                        .collect(Collectors.joining(", ")));
             }
+            user.setTemplateName(templateFuture.join());
 
             MDC.put(USERID, user.getUserId());
             log.info("User '{}' successfully retrieved", userName);
@@ -758,19 +759,19 @@ public class UserProvisioningService {
                 enrichUserWithMacAddresses(user);
             }
 
-            // Publish to Kafka
+            // Fetch template name async while publishing to Kafka
+            CompletableFuture<String> templateNameFuture = (user.getTemplateId() != null)
+                    ? CompletableFuture.supplyAsync(() ->
+                            superTemplateRepository.findById(user.getTemplateId())
+                                    .map(SuperTemplate::getTemplateName).orElse(null))
+                    : CompletableFuture.completedFuture(null);
+
+            // Publish to Kafka (blocking — must succeed)
             publishUserUpdatedEvents(user);
-            sendUserUpdateNotification(user);
+            // Notification is best-effort, run async
+            CompletableFuture.runAsync(() -> sendUserUpdateNotification(user));
 
-            // Fetch template name
-            if (user.getTemplateId() != null) {
-                SuperTemplate template = superTemplateRepository.findById(user.getTemplateId())
-                        .orElse(null);
-                if (template != null) {
-                    user.setTemplateName(template.getTemplateName());
-                }
-            }
-
+            user.setTemplateName(templateNameFuture.join());
             UpdateUserResponse response = mapToUpdateResponse(user);
             log.info(LogMessages.USER_UPDATED, userName);
             return response;
@@ -923,7 +924,7 @@ public class UserProvisioningService {
 
             // PUBLISH USER DELETE EVENT TO KAFKA
             publishUserDeletedEvents(user);
-            sendUserDeletionNotification(user);
+            CompletableFuture.runAsync(() -> sendUserDeletionNotification(user));
 
 
             log.info("User '{}' and all related data delete events published successfully", userName);
