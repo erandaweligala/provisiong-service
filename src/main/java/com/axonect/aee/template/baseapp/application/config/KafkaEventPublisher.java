@@ -5,15 +5,19 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.header.internals.RecordHeader;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.requestreply.ReplyingKafkaTemplate;
 import org.springframework.kafka.requestreply.RequestReplyFuture;
+import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Service;
 
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -47,6 +51,16 @@ public class KafkaEventPublisher {
     @Value("${app.kafka.topic.db-write}")
     private String dbWriteTopic;
 
+    /**
+     * The reply-topic partition this pod exclusively listens on.
+     * Injected from the {@code podReplyPartition} bean so that the
+     * {@code REPLY_PARTITION} header stamped on every outgoing request
+     * always matches the partition the reply container is consuming.
+     */
+    @Autowired
+    @Qualifier("podReplyPartition")
+    private int podReplyPartition;
+
     // -----------------------------------------------------------------------
     // Core business ACK method
     // -----------------------------------------------------------------------
@@ -71,6 +85,13 @@ public class KafkaEventPublisher {
 
     private boolean sendAndAwaitReply(String topic, String key, Object payload, String eventType) throws Exception {
         ProducerRecord<String, Object> producerRecord = new ProducerRecord<>(topic, key, payload);
+
+        // Tell the downstream service which reply-topic partition to use.
+        // This guarantees the reply is always delivered to the same pod that
+        // sent the request, regardless of how many replicas are running.
+        producerRecord.headers().add(new RecordHeader(
+                KafkaHeaders.REPLY_PARTITION,
+                ByteBuffer.allocate(4).putInt(podReplyPartition).array()));
 
         RequestReplyFuture<String, Object, String> future =
                 replyingKafkaTemplate.sendAndReceive(producerRecord, Duration.ofMillis(publishTimeoutMs));
