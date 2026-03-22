@@ -27,8 +27,11 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -184,14 +187,6 @@ public class ServiceProvisioningService {
             String groupId = request.getUserId();
             String planId = request.getPlanId();
 
-            if (request.getStatus() != null && "3".equals(request.getStatus())) {
-                throw new AAAException(
-                        LogMessages.ERROR_BAD_REQUEST,
-                        "Cannot activate service with Inactive status. Only Active or Barred status is allowed.",
-                        HttpStatus.BAD_REQUEST
-                );
-            }
-
             //  READ-ONLY: Fetch group user and plan in parallel — independent queries
             CompletableFuture<UserEntity> userFuture = CompletableFuture.supplyAsync(() ->
                     userRepository.findFirstByGroupId(groupId)
@@ -230,14 +225,6 @@ public class ServiceProvisioningService {
         try {
             String userName = request.getUserId();
             String planId = request.getPlanId();
-
-            if (request.getStatus() != null && "3".equals(request.getStatus())) {
-                throw new AAAException(
-                        LogMessages.ERROR_BAD_REQUEST,
-                        "Cannot activate service with Inactive status. Only Active or Suspended status is allowed.",
-                        HttpStatus.BAD_REQUEST
-                );
-            }
 
             //   READ-ONLY: Fetch user and plan in parallel — independent queries
             CompletableFuture<UserEntity> userFuture = CompletableFuture.supplyAsync(() ->
@@ -386,12 +373,6 @@ public class ServiceProvisioningService {
                         "Service end date is mandatory for One-Time Packs", HttpStatus.BAD_REQUEST);
             }
 
-            validateServiceDates(
-                    request.getServiceStartDate(),
-                    request.getServiceEndDate(),
-                    "One-Time Pack Provisioning"
-            );
-
             setBasicServiceInstanceData(serviceInstance, plan, user, request, isGroup);
 
             //   GENERATE SERVICE ID MANUALLY
@@ -432,15 +413,29 @@ public class ServiceProvisioningService {
             }
             log.debug("Found {} quota details for Plan ID: {}", quotaDetails.size(), planId);
 
+            // Batch-fetch all Bucket and QOSProfile records in 2 queries instead of 2N
+            List<String> bucketIds = quotaDetails.stream()
+                    .map(PlanToBucket::getBucketId)
+                    .collect(Collectors.toList());
+            Map<String, Bucket> bucketMap = bucketRepository.findAllById(bucketIds).stream()
+                    .collect(Collectors.toMap(Bucket::getBucketId, Function.identity()));
+
+            List<Long> qosIds = bucketMap.values().stream()
+                    .map(Bucket::getQosId)
+                    .distinct()
+                    .collect(Collectors.toList());
+            Map<Long, String> qosCodeMap = qosProfileRepository.findAllById(qosIds).stream()
+                    .collect(Collectors.toMap(QOSProfile::getId, QOSProfile::getBngCode));
+
             List<BucketInstance> bucketInstances;
             if (Boolean.FALSE.equals(prorationFlag)) {
                 log.debug("Performing direct quota provision for Service Instance ID: {}", serviceInstance.getId());
-                bucketInstances = directQuotaProvision(quotaDetails, serviceInstance);
+                bucketInstances = directQuotaProvision(quotaDetails, serviceInstance, bucketMap, qosCodeMap);
             } else {
                 Double prorationFactor = getProrationFactor(serviceInstance);
                 log.debug("Performing prorated quota provision with factor: {} for Service Instance ID: {}",
                         prorationFactor, serviceInstance.getId());
-                bucketInstances = proratedQuotaProvision(prorationFactor, quotaDetails, serviceInstance);
+                bucketInstances = proratedQuotaProvision(prorationFactor, quotaDetails, serviceInstance, bucketMap, qosCodeMap);
             }
 
             log.info("Quota provisioning completed for Service Instance ID: {}", serviceInstance.getId());
@@ -455,7 +450,8 @@ public class ServiceProvisioningService {
     }
 
     private List<BucketInstance> proratedQuotaProvision(Double prorationFactor, List<PlanToBucket> quotaDetails,
-                                                        ServiceInstance serviceInstance) {
+                                                        ServiceInstance serviceInstance,
+                                                        Map<String, Bucket> bucketMap, Map<Long, String> qosCodeMap) {
         log.debug("Starting prorated quota provision with factor: {} for Service Instance ID: {}",
                 prorationFactor, serviceInstance.getId());
         List<BucketInstance> bucketInstanceList = new ArrayList<>();
@@ -467,7 +463,7 @@ public class ServiceProvisioningService {
                 bucketInstance.setId(generateBucketInstanceId());
                 bucketInstance.setUpdatedAt(LocalDateTime.now());
 
-                setBucketDetails(planToBucket.getBucketId(), bucketInstance, serviceInstance, planToBucket);
+                setBucketDetails(planToBucket.getBucketId(), bucketInstance, serviceInstance, planToBucket, bucketMap, qosCodeMap);
 
                 if (Boolean.FALSE.equals(planToBucket.getIsUnlimited())) {
                     Long originalQuota = planToBucket.getInitialQuota();
@@ -509,7 +505,8 @@ public class ServiceProvisioningService {
         }
     }
 
-    private List<BucketInstance> directQuotaProvision(List<PlanToBucket> quotaDetails, ServiceInstance serviceInstance) {
+    private List<BucketInstance> directQuotaProvision(List<PlanToBucket> quotaDetails, ServiceInstance serviceInstance,
+                                                      Map<String, Bucket> bucketMap, Map<Long, String> qosCodeMap) {
         log.debug("Starting direct quota provision for Service Instance ID: {}, Quota count: {}",
                 serviceInstance.getId(), quotaDetails.size());
         List<BucketInstance> bucketInstanceList = new ArrayList<>();
@@ -521,7 +518,7 @@ public class ServiceProvisioningService {
                 bucketInstance.setId(generateBucketInstanceId());
                 bucketInstance.setUpdatedAt(LocalDateTime.now());
 
-                setBucketDetails(planToBucket.getBucketId(), bucketInstance, serviceInstance, planToBucket);
+                setBucketDetails(planToBucket.getBucketId(), bucketInstance, serviceInstance, planToBucket, bucketMap, qosCodeMap);
                 log.debug("Bucket provisioned - Bucket ID: {}, Initial quota: {}",
                         planToBucket.getBucketId(), planToBucket.getInitialQuota());
                 bucketInstanceList.add(bucketInstance);
@@ -856,8 +853,6 @@ public class ServiceProvisioningService {
         log.debug("Setting cycle management properties for User: {}, Billing: {}", user.getUserName(), user.getBilling());
         try {
             LocalDateTime serviceStartDate = serviceInstance.getServiceStartDate();
-            serviceInstance.setServiceStartDate(serviceStartDate);
-
             String billing = user.getBilling();
             Integer cycleDate = null;
 
@@ -1088,24 +1083,30 @@ public class ServiceProvisioningService {
     }
 
     private void setBucketDetails(String bucketId, BucketInstance bucketInstance, ServiceInstance serviceInstance,
-                                  PlanToBucket planToBucket) {
+                                  PlanToBucket planToBucket, Map<String, Bucket> bucketMap, Map<Long, String> qosCodeMap) {
         log.debug("Setting bucket details for Bucket ID: {}", bucketId);
         try {
-            //  READ-ONLY: Fetch bucket details
-            Bucket bucket = bucketRepository.findByBucketId(bucketId)
-                    .orElseThrow(() -> {
-                        log.error("Bucket not found: {}", bucketId);
-                        return new AAAException(LogMessages.ERROR_POLICY_CONFLICT,
-                                "BUCKET_NOT_FOUND " + bucketId, HttpStatus.NOT_FOUND);
-                    });
+            Bucket bucket = bucketMap.get(bucketId);
+            if (bucket == null) {
+                log.error("Bucket not found: {}", bucketId);
+                throw new AAAException(LogMessages.ERROR_POLICY_CONFLICT,
+                        "BUCKET_NOT_FOUND " + bucketId, HttpStatus.NOT_FOUND);
+            }
 
             log.debug("Bucket found - Type: {}, Priority: {}", bucket.getBucketType(), bucket.getPriority());
+
+            String bngCode = qosCodeMap.get(bucket.getQosId());
+            if (bngCode == null) {
+                log.error("QoS profile not found for QoS ID: {}", bucket.getQosId());
+                throw new AAAException(LogMessages.ERROR_POLICY_CONFLICT,
+                        "QOS_PROFILE_NOT_FOUND " + bucket.getQosId(), HttpStatus.NOT_FOUND);
+            }
 
             bucketInstance.setBucketId(bucket.getBucketId());
             bucketInstance.setBucketType(bucket.getBucketType());
             bucketInstance.setPriority(bucket.getPriority());
             bucketInstance.setTimeWindow(bucket.getTimeWindow());
-            bucketInstance.setRule(getBNGCodeByRuleId(bucket.getQosId()));
+            bucketInstance.setRule(bngCode);
             bucketInstance.setServiceId(serviceInstance.getId());
             bucketInstance.setCarryForward(planToBucket.getCarryForward());
             bucketInstance.setMaxCarryForward(planToBucket.getMaxCarryForward());
@@ -1130,32 +1131,6 @@ public class ServiceProvisioningService {
         } catch (Exception ex) {
             log.error("Error setting bucket details for Bucket ID: {}", bucketId, ex);
             throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, ex.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
-        }
-    }
-
-    private String getBNGCodeByRuleId(Long qosId) {
-        log.debug("Fetching BNG code for QoS ID: {}", qosId);
-        try {
-            QOSProfile qosProfile = qosProfileRepository.findById(qosId)
-                    .orElseThrow(() -> {
-                        log.error("QoS profile not found: {}", qosId);
-                        return new AAAException(
-                                LogMessages.ERROR_POLICY_CONFLICT,
-                                "QOS_PROFILE_NOT_FOUND " + qosId,
-                                HttpStatus.NOT_FOUND
-                        );
-                    });
-            log.debug("BNG code retrieved: {}", qosProfile.getBngCode());
-            return qosProfile.getBngCode();
-        } catch (AAAException ex) {
-            throw ex;
-        } catch (Exception ex) {
-            log.error("Error fetching BNG code for QoS ID: {}", qosId, ex);
-            throw new AAAException(
-                    LogMessages.ERROR_INTERNAL_ERROR,
-                    ex.getMessage(),
-                    HttpStatus.INTERNAL_SERVER_ERROR
-            );
         }
     }
 
