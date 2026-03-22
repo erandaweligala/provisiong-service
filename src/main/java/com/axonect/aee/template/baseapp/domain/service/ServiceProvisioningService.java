@@ -2,6 +2,7 @@ package com.axonect.aee.template.baseapp.domain.service;
 
 import com.axonect.aee.template.baseapp.application.config.KafkaEventPublisher;
 import com.axonect.aee.template.baseapp.application.repository.*;
+import com.axonect.aee.template.baseapp.domain.adapter.AsyncAdaptorInterface;
 import com.axonect.aee.template.baseapp.application.transport.request.entities.ActiveServiceRequestDTO;
 import com.axonect.aee.template.baseapp.application.transport.request.entities.UpdateRequestDTO;
 import com.axonect.aee.template.baseapp.application.transport.response.transformers.ActiveServiceResponseDTO;
@@ -15,6 +16,7 @@ import com.axonect.aee.template.baseapp.domain.exception.AAAException;
 import com.axonect.aee.template.baseapp.domain.util.LogMessages;
 import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -23,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
@@ -42,6 +45,7 @@ public class ServiceProvisioningService {
     private final EventMapper eventMapper;
     private final ServiceTTLManager serviceTTLManager;
     private final CoAManagementService coAManagementService;
+    private final AsyncAdaptorInterface asyncAdaptor;
 
     private static final String ACTIVE = "Active";
     private static final String INACTIVE = "Inactive";
@@ -536,11 +540,19 @@ public class ServiceProvisioningService {
         }
     }
 
+    @SneakyThrows
     @Transactional(readOnly = true)
     public UpdateResponseDTO updateService(String userId, String planId, String requestId, UpdateRequestDTO updateDto) {
         log.info("Updating service for User ID: {}, Plan ID: {}, Request ID: {}", userId, planId, requestId);
         try {
-            boolean requestExists = serviceInstanceRepository.existsByRequestId(requestId);
+            // Run both independent DB lookups in parallel
+            CompletableFuture<Object>[] results = asyncAdaptor.supplyAll(
+                    2000L,
+                    () -> serviceInstanceRepository.existsByRequestId(requestId),
+                    () -> serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(userId, planId)
+            );
+
+            boolean requestExists = (boolean) results[0].get();
             if (requestExists) {
                 log.error("Service update with Request ID already exists: {}", requestId);
                 throw new AAAException(
@@ -550,8 +562,8 @@ public class ServiceProvisioningService {
                 );
             }
 
-            ServiceInstance serviceInstance = serviceInstanceRepository
-                    .findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(userId, planId)
+            @SuppressWarnings("unchecked")
+            ServiceInstance serviceInstance = ((java.util.Optional<ServiceInstance>) results[1].get())
                     .orElseThrow(() -> new AAAException(
                             LogMessages.ERROR_NOT_FOUND,
                             "No active or suspend service found for the given identifiers.",
@@ -587,6 +599,9 @@ public class ServiceProvisioningService {
         serviceInstance.setRequestId(requestId);
 
         List<BucketInstance> buckets = bucketInstanceRepository.findByServiceId(serviceInstance.getId());
+        BucketInstance priorityBucket = buckets.stream()
+                .min(Comparator.comparing(BucketInstance::getPriority))
+                .orElse(null);
 
         serviceInstance.setStatus(INACTIVE);
         serviceInstance.setUpdatedAt(LocalDateTime.now());
@@ -600,7 +615,7 @@ public class ServiceProvisioningService {
 
         log.info("Service deletion events published for Service ID: {}", serviceInstance.getId());
 
-        return buildUpdateSuccessResponse(serviceInstance, userId, requestId);
+        return buildUpdateSuccessResponse(serviceInstance, userId, requestId, priorityBucket);
     }
 
     private UpdateResponseDTO performServiceUpdate(ServiceInstance serviceInstance, UpdateRequestDTO updateDto,
@@ -663,7 +678,7 @@ public class ServiceProvisioningService {
         }
 
         log.info("Successfully published service update events for Request ID: {}", requestId);
-        return buildUpdateSuccessResponse(serviceInstance, userId, requestId);
+        return buildUpdateSuccessResponse(serviceInstance, userId, requestId, bucketInstance);
     }
 
     private List<BucketInstance> manageMainBucketQuota(UpdateRequestDTO updateDto, BucketInstance bucketInstance) {
@@ -1206,11 +1221,7 @@ public class ServiceProvisioningService {
         };
     }
 
-    private UpdateResponseDTO buildUpdateSuccessResponse(ServiceInstance entity, String userId, String requestId) {  // ADD requestId parameter
-        BucketInstance priorityBucket = bucketInstanceRepository
-                .findFirstByServiceIdOrderByPriorityAsc(entity.getId())
-                .orElse(null);
-
+    private UpdateResponseDTO buildUpdateSuccessResponse(ServiceInstance entity, String userId, String requestId, BucketInstance priorityBucket) {
         Long finalQuota = priorityBucket != null ? priorityBucket.getInitialBalance() : null;
         Long balanceQuota = priorityBucket != null ? priorityBucket.getCurrentBalance() : null;
 
