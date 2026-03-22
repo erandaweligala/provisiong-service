@@ -77,8 +77,6 @@ public class ServiceProvisioningService {
     }
 
 
-
-
     @Transactional(readOnly = true) //  READ-ONLY for validations only
     public ActiveServiceResponseDTO activateService(ActiveServiceRequestDTO request) {
         log.info("Processing service activation for Plan ID: {}, Request ID: {} and User ID: {}",

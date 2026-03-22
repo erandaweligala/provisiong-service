@@ -23,14 +23,9 @@ import java.util.Map;
 @Configuration
 public class KafkaProducerConfig {
 
-    /**
-     * Must match the partition count declared on the reply topic.
-     * Each pod is pinned to (podOrdinal % REPLY_TOPIC_PARTITIONS) so replies
-     * are always routed back to the pod that produced the request.
-     */
+
     static final int REPLY_TOPIC_PARTITIONS = 3;
 
-    /** Shared consumer-group for the reply listener across all pods. */
     private static final String REPLY_GROUP_ID = "spring-reply-group-provisioning";
 
     @Value("${spring.kafka.bootstrap-servers}")
@@ -44,18 +39,6 @@ public class KafkaProducerConfig {
     @Value("${app.kafka.topic.db-write}")
     private String dbWriteTopic;
 
-    /**
-     * Derive a stable partition index for this pod.
-     *
-     * <ul>
-     *   <li>StatefulSet pods  – HOSTNAME = {@code <name>-<ordinal>}
-     *       (e.g. {@code provisioning-service-0}) → use the numeric ordinal.</li>
-     *   <li>Deployment pods   – HOSTNAME is random; fall back to a positive
-     *       hash so the assignment is at least deterministic within a single
-     *       pod's lifetime (good enough because in-flight futures are in-memory
-     *       anyway).  Prefer StatefulSets for full restart-safety.</li>
-     * </ul>
-     */
     private int resolvePodPartition() {
         String hostname = System.getenv("HOSTNAME");
         if (hostname != null && !hostname.isBlank()) {
@@ -150,18 +133,10 @@ public class KafkaProducerConfig {
             ((DefaultKafkaConsumerFactory<String, String>) cf)
                     .updateConfigs(Map.of(
                             ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers,
-                            // Re-read unconsumed replies after a pod restart instead of
-                            // skipping them.  Safe because each pod owns a dedicated
-                            // partition and the ReplyingKafkaTemplate discards any
-                            // message whose correlation-id it does not recognise.
                             ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest"
                     ));
         }
 
-        // Pin this pod to its own partition so:
-        //   (a) only this pod ever receives replies it produced, and
-        //   (b) Kafka commits the offset against a stable group+partition pair,
-        //       allowing crash-recovery without skipping messages.
         TopicPartitionOffset tpo = new TopicPartitionOffset(replyTopic, podReplyPartition);
         ContainerProperties containerProperties = new ContainerProperties(tpo);
         containerProperties.setGroupId(REPLY_GROUP_ID);

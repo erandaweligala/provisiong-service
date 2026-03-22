@@ -51,12 +51,6 @@ public class KafkaEventPublisher {
     @Value("${app.kafka.topic.db-write}")
     private String dbWriteTopic;
 
-    /**
-     * The reply-topic partition this pod exclusively listens on.
-     * Injected from the {@code podReplyPartition} bean so that the
-     * {@code REPLY_PARTITION} header stamped on every outgoing request
-     * always matches the partition the reply container is consuming.
-     */
     @Autowired
     @Qualifier("podReplyPartition")
     private int podReplyPartition;
@@ -86,9 +80,7 @@ public class KafkaEventPublisher {
     private boolean sendAndAwaitReply(String topic, String key, Object payload, String eventType) throws Exception {
         ProducerRecord<String, Object> producerRecord = new ProducerRecord<>(topic, key, payload);
 
-        // Tell the downstream service which reply-topic partition to use.
-        // This guarantees the reply is always delivered to the same pod that
-        // sent the request, regardless of how many replicas are running.
+
         producerRecord.headers().add(new RecordHeader(
                 KafkaHeaders.REPLY_PARTITION,
                 ByteBuffer.allocate(4).putInt(podReplyPartition).array()));
