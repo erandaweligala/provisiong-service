@@ -618,6 +618,7 @@ public class ServiceProvisioningService {
         return buildUpdateSuccessResponse(serviceInstance, userId, requestId, priorityBucket);
     }
 
+    @SneakyThrows
     private UpdateResponseDTO performServiceUpdate(ServiceInstance serviceInstance, UpdateRequestDTO updateDto,
                                                    String userId, String requestId) {
         serviceInstance.setRequestId(requestId);
@@ -626,6 +627,13 @@ public class ServiceProvisioningService {
         String oldStatus = serviceInstance.getStatus();
         log.info("Service status transition check - user='{}', currentStatus='{}'", userId, oldStatus);
 
+        // Start the DB fetch immediately — only needs the ID, independent of field mutations below
+        CompletableFuture<Object>[] bucketFuture = asyncAdaptor.supplyAll(
+                2000L,
+                () -> bucketInstanceRepository.findFirstByServiceIdOrderByPriorityAsc(serviceInstance.getId())
+        );
+
+        // In-memory work runs while DB fetch is in-flight
         LocalDateTime newStartDate = updateDto.getServiceStartDate() != null ?
                 updateDto.getServiceStartDate() : serviceInstance.getServiceStartDate();
         LocalDateTime newEndDate = updateDto.getServiceEndDate() != null ?
@@ -641,8 +649,9 @@ public class ServiceProvisioningService {
 
         serviceInstance.setUpdatedAt(LocalDateTime.now());
 
-        BucketInstance bucketInstance = bucketInstanceRepository
-                .findFirstByServiceIdOrderByPriorityAsc(serviceInstance.getId())
+        // Join the async result — DB fetch is likely already done by now
+        @SuppressWarnings("unchecked")
+        BucketInstance bucketInstance = ((java.util.Optional<BucketInstance>) bucketFuture[0].get())
                 .orElseThrow(() -> new AAAException(
                         LogMessages.ERROR_NOT_FOUND,
                         "No active bucket instances found for " + serviceInstance.getId(),
