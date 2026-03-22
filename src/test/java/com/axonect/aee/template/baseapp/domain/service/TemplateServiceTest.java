@@ -141,28 +141,20 @@ class TemplateServiceTest {
 
         // Setup publish results
         successResult = PublishResult.builder()
-                .dcSuccess(true)
-                .drSuccess(true)
-                .dcLatencyMs(45L)
-                .drLatencyMs(52L)
+                .Success(true)
+                .LatencyMs(45L)
                 .build();
 
         partialSuccessResult = PublishResult.builder()
-                .dcSuccess(true)
-                .drSuccess(false)
-                .dcError(null)
-                .drError("Connection timeout")
-                .dcLatencyMs(45L)
-                .drLatencyMs(5000L)
+                .Success(true)
+                .Error(null)
+                .LatencyMs(45L)
                 .build();
 
         completeFailureResult = PublishResult.builder()
-                .dcSuccess(false)
-                .drSuccess(false)
-                .dcError("Connection refused")
-                .drError("Connection timeout")
-                .dcLatencyMs(5000L)
-                .drLatencyMs(5000L)
+                .Success(false)
+                .Error("Connection refused")
+                .LatencyMs(5000L)
                 .build();
     }
 

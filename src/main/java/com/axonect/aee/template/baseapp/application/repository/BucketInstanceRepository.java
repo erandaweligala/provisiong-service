@@ -53,38 +53,36 @@ public interface BucketInstanceRepository extends JpaRepository<BucketInstance,L
     long countByServiceIdIn(List<Long> serviceIds);
 
     @Query("""
-        SELECT new com.axonect.aee.template.baseapp.domain.entities.dto.BucketFlatProjection(
-            si.id,
-            si.username,
-            si.billing,
-            si.status,
-            si.isGroup,
-            si.planId,
-            p.planName,
-            p.planType,
-            p.recurringPeriod,
-            b.bucketId,
-            b.priority,
-            b.initialBalance,
-            b.currentBalance,
-            b.usage,
-            b.updatedAt,
-            q.downLink,
-            q.upLink
-        )
-        FROM BucketInstance b
-        JOIN ServiceInstance si ON b.serviceId = si.id
-        JOIN QOSProfile q       ON b.rule       = q.bngCode
-        JOIN Plan p             ON si.planId    = p.planId
-        WHERE si.username IN :usernames
-        AND b.id = (
-            SELECT b2.id
-            FROM BucketInstance b2
-            WHERE b2.serviceId = si.id
-            ORDER BY b2.priority ASC
-            FETCH FIRST 1 ROW ONLY
-        )
-        ORDER BY si.username, si.id
-        """)
+    SELECT new com.axonect.aee.template.baseapp.domain.entities.dto.BucketFlatProjection(
+        si.id,
+        si.username,
+        si.billing,
+        si.status,
+        si.isGroup,
+        si.planId,
+        p.planName,
+        p.planType,
+        p.recurringPeriod,
+        b.bucketId,
+        b.priority,
+        b.initialBalance,
+        b.currentBalance,
+        b.usage,
+        b.updatedAt,
+        q.downLink,
+        q.upLink
+    )
+    FROM BucketInstance b
+    JOIN ServiceInstance si ON b.serviceId = si.id
+    JOIN QOSProfile q       ON b.rule       = q.bngCode
+    JOIN Plan p             ON si.planId    = p.planId
+    WHERE si.username IN :usernames
+    AND b.priority = (
+        SELECT MIN(b2.priority)
+        FROM BucketInstance b2
+        WHERE b2.serviceId = si.id
+    )
+    ORDER BY si.username, si.id
+    """)
     List<BucketFlatProjection> findFlatBucketDetailsByUsernames(@Param("usernames") List<String> usernames);
 }

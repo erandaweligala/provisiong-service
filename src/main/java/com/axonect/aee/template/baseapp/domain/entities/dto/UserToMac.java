@@ -22,7 +22,7 @@ public class UserToMac {
 
     @Id
     @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "mac_seq")
-    @SequenceGenerator(name = "mac_seq", sequenceName = "AAA_USER_MAC_SEQ", allocationSize = 50)
+    @SequenceGenerator(name = "mac_seq", sequenceName = "AAA_USER_MAC_SEQ", allocationSize = 1)
     @Column(name = "ID")
     private Long id;
 

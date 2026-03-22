@@ -19,11 +19,9 @@ import com.axonect.aee.template.baseapp.domain.entities.dto.ChildTemplate;
 import com.axonect.aee.template.baseapp.domain.entities.dto.SuperTemplate;
 import com.axonect.aee.template.baseapp.domain.enums.MessageType;
 import com.axonect.aee.template.baseapp.domain.enums.TemplateStatus;
-import com.axonect.aee.template.baseapp.domain.events.ChildTemplateEvent;
 import com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric;
 import com.axonect.aee.template.baseapp.domain.events.EventMapper;
 import com.axonect.aee.template.baseapp.domain.events.PublishResult;
-import com.axonect.aee.template.baseapp.domain.events.SuperTemplateEvent;
 import com.axonect.aee.template.baseapp.domain.exception.AAAException;
 import com.axonect.aee.template.baseapp.domain.specification.TemplateSpecification;
 import com.axonect.aee.template.baseapp.domain.util.LogMessages;
@@ -42,9 +40,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Random;
 import java.util.Set;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -67,25 +63,6 @@ public class TemplateService {
     private static final String TEMPLATE_NOT_FOUND = "Template not found with ID: {}";
     private static final String INVALID_STATUS = "Invalid status '";
 
-    // ========== ID GENERATION METHODS ==========
-
-    /**
-     * Generates a non-cryptographic unique template ID.
-     * Used internally; cryptographic randomness is not required.
-     */
-    /*@SuppressWarnings("java:S2245")
-    private Long generateTemplateId() {
-        long timestampPart = System.currentTimeMillis() % 1_000_000;
-        int random = ThreadLocalRandom.current().nextInt(10_000);
-        return timestampPart * 10_000L + random;
-    }
-    private Long generateSuperTemplateId() {
-        return generateTemplateId();
-    }
-
-    private Long generateChildTemplateId() {
-        return generateTemplateId();
-    }*/
 
     /**
      * Get next sequence value for SuperTemplate ID
@@ -450,14 +427,14 @@ public class TemplateService {
                         superTemplate.getId());
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        "Failed to publish template created events to Kafka",
+                        "Something went wrong",
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
 
-            if (!superDbResult.isBothSuccess()) {
+            if (!superDbResult.isSuccess()) {
                 log.warn("Partial failure publishing super template DB event. DC: {}, DR: {}",
-                        superDbResult.isDcSuccess(), superDbResult.isDrSuccess());
+                        superDbResult.isSuccess());
             }
 
             // 3. Publish ChildTemplate events
@@ -470,7 +447,7 @@ public class TemplateService {
                     superTemplate.getId(), e);
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish template created events",
+                    "Something went wrong",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -495,16 +472,16 @@ public class TemplateService {
                     log.error("Failed to publish child template created events for child ID '{}'",
                             child.getId());
                 }
-                if (!dbResult.isBothSuccess()) {
+                if (!dbResult.isSuccess()) {
                     log.warn("Partial failure publishing DB event for child ID '{}'. DC: {}, DR: {}",
-                            child.getId(), dbResult.isDcSuccess(), dbResult.isDrSuccess());
+                            child.getId(), dbResult.isSuccess());
                 }
             }
 
             if (!failedResults.isEmpty()) {
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        String.format("Failed to publish %d child template creation events", failedResults.size()),
+                        String.format("Something went wrong while %d child template creation ", failedResults.size()),
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
@@ -515,7 +492,7 @@ public class TemplateService {
             log.error("Failed to publish child template created events", e);
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish child template created events",
+                    "Something went wrong",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -542,14 +519,14 @@ public class TemplateService {
                         superTemplate.getId());
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        "Failed to publish template updated events to Kafka",
+                        "Something went wrong",
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
 
-            if (!superDbResult.isBothSuccess()) {
+            if (!superDbResult.isSuccess()) {
                 log.warn("Partial failure publishing super template DB update event. DC: {}, DR: {}",
-                        superDbResult.isDcSuccess(), superDbResult.isDrSuccess());
+                        superDbResult.isSuccess());
             }
 
             // 3. Publish updated ChildTemplate events
@@ -569,7 +546,7 @@ public class TemplateService {
                     superTemplate.getId(), e);
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish template updated events",
+                    "Something went wrong",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -590,14 +567,14 @@ public class TemplateService {
                     log.error("Failed to publish child template update events for child ID '{}'", child.getId());
                     throw new AAAException(
                             LogMessages.ERROR_INTERNAL_ERROR,
-                            "Failed to publish child template update events",
+                            "Something went wrong",
                             HttpStatus.INTERNAL_SERVER_ERROR
                     );
                 }
 
-                if (!dbResult.isBothSuccess()) {
+                if (!dbResult.isSuccess()) {
                     log.warn("Partial failure publishing DB update event. DC: {}, DR: {}",
-                            dbResult.isDcSuccess(), dbResult.isDrSuccess());
+                            dbResult.isSuccess());
                 }
             }
         } catch (AAAException ex) {
@@ -606,7 +583,7 @@ public class TemplateService {
             log.error("Failed to publish child template updated events", e);
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish child template updated events",
+                    "Something went wrong",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -948,7 +925,7 @@ public class TemplateService {
                 if (MessageType.EXPIRE.name().equalsIgnoreCase(template.getMessageType())
                         && template.getDaysToExpire() == null) {
 
-                    log.error("daysToExpire is mandatory for messageType EXPIRE");
+                    log.error("daysToExpire parameter is mandatory for messageType EXPIRE");
                     throw new AAAException(
                             LogMessages.ERROR_VALIDATION_FAILED,
                             LogMessages.MSG_EXPIRE_DATE_MANDATORY,
@@ -1008,7 +985,7 @@ public class TemplateService {
 
                 if (MessageType.USAGE.name().equalsIgnoreCase(template.getMessageType())) {
                     if (template.getQuotaPercentage() == null) {
-                        log.error("quotaPercentage is mandatory for messageType USAGE");
+                        log.error("quotaPercentage parameter is mandatory for messageType USAGE");
                         throw new AAAException(
                                 LogMessages.ERROR_VALIDATION_FAILED,
                                 LogMessages.MSG_QUOTA_MANDATORY,
@@ -1017,7 +994,7 @@ public class TemplateService {
                     }
 
                     if (template.getQuotaPercentage() < 0 || template.getQuotaPercentage() > 100) {
-                        log.error("quotaPercentage must be between 0-100, received: {}", template.getQuotaPercentage());
+                        log.error("quotaPercentage should be between 0-100, received: {}", template.getQuotaPercentage());
                         throw new AAAException(
                                 LogMessages.ERROR_VALIDATION_FAILED,
                                 LogMessages.MSG_INVALID_QUOTA,

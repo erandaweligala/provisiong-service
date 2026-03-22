@@ -379,9 +379,8 @@ class UserProvisioningServiceTest {
 
         // *** THE FIX: dcError must be non-null so AAAException.getMessage() isn't null ***
         PublishResult completeFailure = PublishResult.builder()
-                .dcSuccess(false)
-                .drSuccess(false)
-                .dcError("Failed to publish user creation event to Kafka")
+                .Success(false)
+                .Error("Failed to publish user creation event to Kafka")
                 .build();
         when(kafkaEventPublisher.publishDBWriteEvent(any()))
                 .thenReturn(completeFailure);
@@ -409,7 +408,7 @@ class UserProvisioningServiceTest {
         when(eventMapper.toDBWriteEvent(anyString(), any(), anyString()))
                 .thenReturn(new DBWriteRequestGeneric());
         when(kafkaEventPublisher.publishDBWriteEvent(any()))
-                .thenReturn(PublishResult.builder().dcSuccess(true).drSuccess(false).build());
+                .thenReturn(PublishResult.builder().Success(true).build());
 
         CreateUserResponse response = userProvisioningService.createUser(validCreateRequest);
 
@@ -526,7 +525,10 @@ class UserProvisioningServiceTest {
         Page<UserEntity> page = new PageImpl<>(Arrays.asList(testUser));
         when(userRepository.findAll(any(Specification.class), any(Pageable.class)))
                 .thenReturn(page);
-        when(superTemplateRepository.findById(1L)).thenReturn(Optional.of(testTemplate));
+        when(superTemplateRepository.findByIdIn(anyList()))
+                .thenReturn(List.of(testTemplate));
+        when(userToMacRepository.findByUserNameIn(anyList()))
+                .thenReturn(List.of());
 
         PagedUserResponse response = userProvisioningService.getAllUsers(
                 1, 10, null, null, null, null);
@@ -541,7 +543,10 @@ class UserProvisioningServiceTest {
         Page<UserEntity> page = new PageImpl<>(Arrays.asList(testUser));
         when(userRepository.findAll(any(Specification.class), any(Pageable.class)))
                 .thenReturn(page);
-        when(superTemplateRepository.findById(1L)).thenReturn(Optional.of(testTemplate));
+        when(superTemplateRepository.findByIdIn(anyList()))
+                .thenReturn(List.of(testTemplate));
+        when(userToMacRepository.findByUserNameIn(anyList()))
+                .thenReturn(List.of());
 
         PagedUserResponse response = userProvisioningService.getAllUsers(
                 1, 10, 1, null, null, null);
@@ -555,7 +560,10 @@ class UserProvisioningServiceTest {
         Page<UserEntity> page = new PageImpl<>(Arrays.asList(testUser));
         when(userRepository.findAll(any(Specification.class), any(Pageable.class)))
                 .thenReturn(page);
-        when(superTemplateRepository.findById(1L)).thenReturn(Optional.of(testTemplate));
+        when(superTemplateRepository.findByIdIn(anyList()))
+                .thenReturn(List.of(testTemplate));
+        when(userToMacRepository.findByUserNameIn(anyList()))
+                .thenReturn(List.of());
 
         PagedUserResponse response = userProvisioningService.getAllUsers(
                 1, 10, null, "test", null, null);
@@ -569,7 +577,10 @@ class UserProvisioningServiceTest {
         Page<UserEntity> page = new PageImpl<>(Arrays.asList(testUser));
         when(userRepository.findAll(any(Specification.class), any(Pageable.class)))
                 .thenReturn(page);
-        when(superTemplateRepository.findById(1L)).thenReturn(Optional.of(testTemplate));
+        when(superTemplateRepository.findByIdIn(anyList()))
+                .thenReturn(List.of(testTemplate));
+        when(userToMacRepository.findByUserNameIn(anyList()))
+                .thenReturn(List.of());
 
         PagedUserResponse response = userProvisioningService.getAllUsers(
                 1, 10, null, null, null, "2");
@@ -583,7 +594,10 @@ class UserProvisioningServiceTest {
         Page<UserEntity> page = new PageImpl<>(Arrays.asList(testUser));
         when(userRepository.findAll(any(Specification.class), any(Pageable.class)))
                 .thenReturn(page);
-        when(superTemplateRepository.findById(1L)).thenReturn(Optional.of(testTemplate));
+        when(superTemplateRepository.findByIdIn(anyList()))
+                .thenReturn(List.of(testTemplate));
+        when(userToMacRepository.findByUserNameIn(anyList()))
+                .thenReturn(List.of());
 
         PagedUserResponse response = userProvisioningService.getAllUsers(
                 1, 10, null, null, 0, null);
@@ -727,7 +741,8 @@ class UserProvisioningServiceTest {
     @Test
     @DisplayName("Get User List - Returns all usernames")
     void getUserList_Success() {
-        when(userRepository.findAll()).thenReturn(Arrays.asList(testUser));
+        when(userRepository.findAllUserNames())
+                .thenReturn(List.of("testuser"));
 
         List<UserListResponse> response = userProvisioningService.getUserList();
 
@@ -738,7 +753,8 @@ class UserProvisioningServiceTest {
     @Test
     @DisplayName("Get User List - Empty result")
     void getUserList_Empty() {
-        when(userRepository.findAll()).thenReturn(Collections.emptyList());
+        when(userRepository.findAllUserNames())
+                .thenReturn(Collections.emptyList());
 
         List<UserListResponse> response = userProvisioningService.getUserList();
 
@@ -1049,7 +1065,10 @@ class UserProvisioningServiceTest {
         Page<UserEntity> page = new PageImpl<>(Arrays.asList(testUser));
         when(userRepository.findAll(any(Specification.class), any(Pageable.class)))
                 .thenReturn(page);
-        when(superTemplateRepository.findById(1L)).thenReturn(Optional.of(testTemplate));
+        when(superTemplateRepository.findByIdIn(anyList()))
+                .thenReturn(List.of(testTemplate));
+        when(userToMacRepository.findByUserNameIn(anyList()))
+                .thenReturn(List.of());
 
         PagedUserResponse response = userProvisioningService.getAllUsers(
                 1, 10, 1, "test", 0, "2");
@@ -1063,7 +1082,10 @@ class UserProvisioningServiceTest {
         Page<UserEntity> page = new PageImpl<>(Arrays.asList(testUser));
         when(userRepository.findAll(any(Specification.class), any(Pageable.class)))
                 .thenReturn(page);
-        when(superTemplateRepository.findById(1L)).thenReturn(Optional.of(testTemplate));
+        when(superTemplateRepository.findByIdIn(anyList()))
+                .thenReturn(List.of(testTemplate));
+        when(userToMacRepository.findByUserNameIn(anyList()))
+                .thenReturn(List.of());
 
         PagedUserResponse response = userProvisioningService.getAllUsers(
                 1, 100, null, null, null, null);
@@ -1167,8 +1189,7 @@ class UserProvisioningServiceTest {
                 .thenReturn(new DBWriteRequestGeneric());
         when(kafkaEventPublisher.publishDBWriteEvent(any()))
                 .thenReturn(PublishResult.builder()
-                        .dcSuccess(true)
-                        .drSuccess(true)
+                        .Success(true)
                         .build());
     }
 
@@ -1484,7 +1505,7 @@ class UserProvisioningServiceTest {
     }
 
 
-    @Test
+    /*@Test
     @DisplayName("Update User - Duplicate contact numbers in request")
     void updateUser_DuplicateContactNumbersInRequest() throws Exception {
         validUpdateRequest.setContactNumber("1234567890,1234567890");
@@ -1511,7 +1532,7 @@ class UserProvisioningServiceTest {
 
         assertTrue(exception.getMessage().contains("Duplicate contact email"));
     }
-
+*/
 // ==================== EDGE CASE AND UTILITY TESTS ====================
 
     @Test
@@ -1579,7 +1600,7 @@ class UserProvisioningServiceTest {
 
     // ==================== HELPER/UTILITY METHOD COVERAGE ====================
 
-    @Test
+    /*@Test
     @DisplayName("Validate Contact Numbers - Success with multiple valid numbers")
     void validateContactNumbers_Success() throws Exception {
         validCreateRequest.setContactNumber("1234567890,9876543210,5555555555");
@@ -1628,7 +1649,7 @@ class UserProvisioningServiceTest {
         UpdateUserResponse response = userProvisioningService.updateUser("testuser", validUpdateRequest);
 
         assertNotNull(response);
-    }
+    }*/
 
     @Test
     @DisplayName("Update - With all optional fields")
@@ -1639,9 +1660,9 @@ class UserProvisioningServiceTest {
         validUpdateRequest.setIpPoolName("newpool");
         validUpdateRequest.setIpv4("192.168.1.100");
         validUpdateRequest.setIpv6("2001:db8::1");
-        validUpdateRequest.setContactName("John Doe");
-        validUpdateRequest.setContactEmail("john@example.com");
-        validUpdateRequest.setContactNumber("1234567890");
+        //validUpdateRequest.setContactName("John Doe");
+        //validUpdateRequest.setContactEmail("john@example.com");
+        //validUpdateRequest.setContactNumber("1234567890");
         validUpdateRequest.setSessionTimeout("3600");
         validUpdateRequest.setBillingAccountRef("ACC123");
         validUpdateRequest.setSubscription(1);

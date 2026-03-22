@@ -128,18 +128,15 @@ class VendorConfigServiceTest {
 
         // Setup publish results
         successPublishResult = PublishResult.builder()
-                .dcSuccess(true)
-                .drSuccess(false)
+                .Success(true)
                 .build();
 
         failurePublishResult = PublishResult.builder()
-                .dcSuccess(false)
-                .drSuccess(false)
+                .Success(false)
                 .build();
 
         partialFailurePublishResult = PublishResult.builder()
-                .dcSuccess(false)
-                .drSuccess(false)
+                .Success(false)
                 .build();
 
         // Inject EntityManager manually
@@ -252,7 +249,7 @@ class VendorConfigServiceTest {
         });
 
         assertEquals("VENDOR_CONFIG_CREATION_ERROR_CODE", exception.getCode());
-        assertTrue(exception.getMessage().contains("Failed to publish vendor config created events"));
+        assertTrue(exception.getMessage().contains("Something went wrong"));
     }
 
     @Test
@@ -273,15 +270,14 @@ class VendorConfigServiceTest {
         });
 
         assertEquals("VENDOR_CONFIG_CREATION_ERROR_CODE", exception.getCode());
-        assertTrue(exception.getMessage().contains("Failed to publish vendor config created events"));
+        assertTrue(exception.getMessage().contains("Something went wrong"));
     }
 
     @Test
     void create_PartialKafkaFailure_LogsWarning() {
         // Arrange
         PublishResult partialSuccess = PublishResult.builder()
-                .dcSuccess(true)
-                .drSuccess(false)
+                .Success(true)
                 .build();
 
         when(repository.existsByVendorIdAndAttributeId(anyString(), anyString())).thenReturn(false);

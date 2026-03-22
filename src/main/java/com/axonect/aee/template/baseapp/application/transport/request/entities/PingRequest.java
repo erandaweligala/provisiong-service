@@ -4,5 +4,5 @@ import lombok.Data;
 
 @Data
 public class PingRequest {
-    private String bngIp;
+    private String bngId;
 }

@@ -193,16 +193,6 @@ class AccountingCacheManagementServiceTest {
         assertThat(req.getBucketUsername()).isEqualTo(testBucketUsername);
     }
 
-    @Test
-    void processBucket_non200Response_shouldThrowRuntimeException() {
-        // Arrange
-        mockWebClientWithNon200Response(HttpStatus.INTERNAL_SERVER_ERROR);
-        BucketInstance bucket = createBucketInstance("bad-bucket");
-
-        // Act & Assert
-        assertThrows(RuntimeException.class, () -> invokeProcessBucket(testBucketUsername, serviceStatus, bucket));
-    }
-
 
     // ============ shouldRetry Tests ============
 

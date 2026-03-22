@@ -22,6 +22,10 @@ public class CreateUserRequest {
     // --- Basic User Info ---
     @JsonProperty("user_name")
     @NotBlank(message = "user_name is mandatory")
+    @Pattern(
+            regexp = "^[a-zA-Z0-9 ._'-]+$",
+            message = "user_name can contain letters, numbers, spaces, and . _ ' - characters"
+    )
     private String userName;
 
     @JsonProperty("password")
@@ -102,23 +106,23 @@ public class CreateUserRequest {
     @JsonProperty("cycle_date")
     private Integer cycleDate; // Required if billing = 3
 
-    // --- Contact Info ---
+    /*// --- Contact Info ---
     @JsonProperty("contact_name")
-    private String contactName;
+    private String contactName;*/
 
-    @JsonProperty("contact_email")
+    /*@JsonProperty("contact_email")
     @Pattern(
             regexp = "^$|^(\\s*[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\s*)(,\\s*[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\s*)*$",
             message = "Invalid contact_email format. Multiple emails allowed, separated by commas."
     )
-    private String contactEmail;
+    private String contactEmail;*/
 
-    @JsonProperty("contact_number")
+/*    @JsonProperty("contact_number")
     @Pattern(
             regexp = "^(\\+?[0-9\\s\\-\\(\\)]+)(,\\s*\\+?[0-9\\s\\-\\(\\)]+)*$",
             message = "Invalid contact_number format. Multiple numbers allowed, separated by commas."
     )
-    private String contactNumber;
+    private String contactNumber;*/
 
     // --- Session Config ---
     @JsonProperty("concurrency")
@@ -142,6 +146,10 @@ public class CreateUserRequest {
 
     @JsonProperty("request_id")
     @NotBlank(message = "request_id is mandatory")
+    @Pattern(
+            regexp = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            message = "request_id must be a valid UUID format (e.g. 550e8400-e29b-41d4-a716-446655440000)"
+    )
     private String requestId;
 
     @JsonProperty("template_id")

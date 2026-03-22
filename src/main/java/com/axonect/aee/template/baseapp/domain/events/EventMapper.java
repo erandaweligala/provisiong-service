@@ -565,4 +565,36 @@ public class EventMapper {
         columns.put("LAST_UPDATED_BY", vendorConfig.getLastUpdatedBy());
         return columns;
     }
+    /**
+     * Create DBWriteRequestGeneric for AUTH_CREDENTIALS
+     */
+    public DBWriteRequestGeneric toCredentialDBWriteEvent(String eventType, AuthCredential credential) {
+        Map<String, Object> columnValues = buildCredentialColumnValues(credential);
+
+        Map<String, Object> whereConditions = new HashMap<>();
+        whereConditions.put("USERNAME", credential.getUsername()); // ID removed — not available pre-insert
+
+        return DBWriteRequestGeneric.builder()
+                .eventType(eventType)
+                .timestamp(LocalDateTime.now().format(FORMATTER))
+                .userName(credential.getUsername())
+                .columnValues(columnValues)
+                .whereConditions(whereConditions)
+                .tableName("AUTH_CREDENTIALS")
+                .build();
+    }
+
+    private Map<String, Object> buildCredentialColumnValues(AuthCredential credential) {
+        Map<String, Object> columns = new HashMap<>();
+        // ID is intentionally excluded — Oracle GENERATED ALWAYS AS IDENTITY
+        // column cannot be inserted into explicitly, the DB auto-assigns it
+        columns.put("USERNAME",   credential.getUsername());
+        columns.put("PASSWORD",   credential.getPassword());
+        columns.put("IS_ACTIVE",  credential.isActive());
+        columns.put("CREATED_AT", credential.getCreatedAt() != null ?
+                credential.getCreatedAt().format(FORMATTER) : null);
+        columns.put("UPDATED_AT", credential.getUpdatedAt() != null ?
+                credential.getUpdatedAt().format(FORMATTER) : null);
+        return columns;
+    }
 }

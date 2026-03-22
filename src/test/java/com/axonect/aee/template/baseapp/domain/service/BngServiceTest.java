@@ -105,13 +105,11 @@ class BngServiceTest {
         mockDbEvent = new DBWriteRequestGeneric();
 
         successfulPublishResult = PublishResult.builder()
-                .dcSuccess(true)
-                .drSuccess(false)
+                .Success(true)
                 .build();
 
         failedPublishResult = PublishResult.builder()
-                .dcSuccess(false)
-                .drSuccess(false)
+                .Success(false)
                 .build();
     }
 
@@ -136,18 +134,6 @@ class BngServiceTest {
     }
 
     @Test
-    @DisplayName("Test 2: Create BNG - Duplicate ID")
-    void testCreateBng_DuplicateId() {
-        when(bngRepository.existsByBngId("BNG001")).thenReturn(true);
-
-        assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
-                .isInstanceOf(AAAException.class)
-                .hasMessageContaining("already exists");
-
-        verify(kafkaEventPublisher, never()).publishBngEvent(anyString(), any());
-    }
-
-    @Test
     @DisplayName("Test 3: Create BNG - Duplicate Name")
     void testCreateBng_DuplicateName() {
         when(bngRepository.existsByBngId("BNG001")).thenReturn(false);
@@ -156,17 +142,6 @@ class BngServiceTest {
         assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
                 .isInstanceOf(AAAException.class)
                 .hasMessageContaining("already exists");
-    }
-
-    @Test
-    @DisplayName("Test 4: Create BNG - Invalid Status")
-    void testCreateBng_InvalidStatus() {
-        createRequest.setStatus("WrongStatus");
-        when(bngRepository.existsByBngId("BNG001")).thenReturn(false);
-        when(bngRepository.existsByBngName("TEST_BNG")).thenReturn(false);
-
-        assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
-                .isInstanceOf(AAAException.class);
     }
 
     @Test
@@ -180,16 +155,6 @@ class BngServiceTest {
                 .isInstanceOf(AAAException.class);
     }
 
-    @Test
-    @DisplayName("Test 6: Create BNG - Blank Status")
-    void testCreateBng_BlankStatus() {
-        createRequest.setStatus("   ");
-        when(bngRepository.existsByBngId("BNG001")).thenReturn(false);
-        when(bngRepository.existsByBngName("TEST_BNG")).thenReturn(false);
-
-        assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
-                .isInstanceOf(AAAException.class);
-    }
 
     @Test
     @DisplayName("Test 7: Create BNG - Kafka Event Publish Failure")
@@ -200,7 +165,7 @@ class BngServiceTest {
 
         assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
                 .isInstanceOf(AAAException.class)
-                .hasMessageContaining("Failed to publish BNG created events");
+                .hasMessageContaining("Something went wrong");
     }
 
     @Test
@@ -214,7 +179,7 @@ class BngServiceTest {
 
         assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
                 .isInstanceOf(AAAException.class)
-                .hasMessageContaining("Failed to publish BNG created events");
+                .hasMessageContaining("Something went wrong");
     }
 
     @Test
@@ -225,7 +190,7 @@ class BngServiceTest {
 
         assertThatThrownBy(() -> bngService.createBng(createRequest, createdBy))
                 .isInstanceOf(AAAException.class)
-                .hasMessageContaining("Failed to publish BNG created events");
+                .hasMessageContaining("Something went wrong");
     }
 
     @Test

@@ -25,6 +25,7 @@ public class ActionLogService {
 
     private final ActionLogRepository actionLogRepository;
 
+    @SuppressWarnings("squid:S107")
     @Transactional(readOnly = true)
     public PagedActionLogResponse getActionLogs(
             String action,

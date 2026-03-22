@@ -2,6 +2,7 @@ package com.axonect.aee.template.baseapp.domain.adapter;
 
 import com.axonect.aee.template.baseapp.domain.exception.AAAException;
 import lombok.SneakyThrows;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -16,7 +17,7 @@ public class AsyncAdaptor implements AsyncAdaptorInterface {
 
     private final TaskExecutor executor;
 
-    public AsyncAdaptor(TaskExecutor executor) {
+    public AsyncAdaptor(@Qualifier("asyncExecutor") TaskExecutor executor) {
         this.executor = executor;
     }
 

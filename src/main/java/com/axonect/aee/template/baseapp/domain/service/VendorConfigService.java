@@ -30,6 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 @Service
@@ -61,9 +62,9 @@ public class VendorConfigService {
                     request.getVendorId(), request.getAttributeName());
 
             // Run duplicate checks in parallel — independent DB queries
-            java.util.concurrent.CompletableFuture<Boolean> attrIdExists = java.util.concurrent.CompletableFuture.supplyAsync(
+            CompletableFuture<Boolean> attrIdExists = java.util.concurrent.CompletableFuture.supplyAsync(
                     () -> repository.existsByVendorIdAndAttributeId(request.getVendorId(), request.getAttributeId()));
-            java.util.concurrent.CompletableFuture<Boolean> attrNameExists = java.util.concurrent.CompletableFuture.supplyAsync(
+            CompletableFuture<Boolean> attrNameExists = java.util.concurrent.CompletableFuture.supplyAsync(
                     () -> repository.existsByVendorIdAndAttributeName(request.getVendorId(), request.getAttributeName()));
 
             if (attrIdExists.join()) {
@@ -133,13 +134,13 @@ public class VendorConfigService {
                         vendorConfig.getVendorId());
                 throw new AAAException(
                         "VENDOR_CONFIG_CREATION_ERROR_CODE",
-                        "Failed to publish vendor config created events to Kafka",
+                        "Something went wrong",
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
 
             // Log warnings if one cluster failed
-            if (!dbResult.isDcSuccess()) {
+            if (!dbResult.isSuccess()) {
                 log.warn("Failed to publish some vendor config creation events to DC cluster for vendorId '{}'",
                         vendorConfig.getVendorId());
             }
@@ -152,7 +153,7 @@ public class VendorConfigService {
                     vendorConfig.getVendorId(), e);
             throw new AAAException(
                     "VENDOR_CONFIG_CREATION_ERROR_CODE",
-                    "Failed to publish vendor config created events",
+                    "Something went wrong",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -328,7 +329,7 @@ public class VendorConfigService {
                         vendorConfig.getVendorId());
                 throw new AAAException(
                         "VENDOR_CONFIG_UPDATE_ERROR_CODE",
-                        "Failed to publish vendor config update events to Kafka",
+                        "Something went wrong",
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
@@ -341,7 +342,7 @@ public class VendorConfigService {
                     vendorConfig.getVendorId(), e);
             throw new AAAException(
                     "VENDOR_CONFIG_UPDATE_ERROR_CODE",
-                    "Failed to publish vendor config updated events",
+                    "Something went wrong",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -471,7 +472,7 @@ public class VendorConfigService {
             log.debug("Vendor config deleted successfully: ID={}, vendorId={}",
                     id, vendorConfig.getVendorId());
 
-            return String.format("Vendor config %d deleted successfully", id);
+            return String.format("Vendor config deleted successfully");
 
         } catch (AAAException e) {
             throw e;
@@ -479,7 +480,7 @@ public class VendorConfigService {
             log.error("Failed to delete vendor config with ID: {}", id, e);
             throw new AAAException(
                     "VENDOR_CONFIG_DELETION_ERROR_CODE",
-                    String.format("Failed to delete vendor config with ID %d", id),
+                    String.format("Failed to delete vendor config"),
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         } finally {
@@ -503,7 +504,7 @@ public class VendorConfigService {
                         vendorConfig.getVendorId());
                 throw new AAAException(
                         "VENDOR_CONFIG_DELETION_ERROR_CODE",
-                        "Failed to publish vendor config deletion events to Kafka",
+                        "Something went wrong",
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
@@ -516,7 +517,7 @@ public class VendorConfigService {
                     vendorConfig.getVendorId(), e);
             throw new AAAException(
                     "VENDOR_CONFIG_DELETION_ERROR_CODE",
-                    "Failed to publish vendor config deleted events",
+                    "Something went wrong",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }

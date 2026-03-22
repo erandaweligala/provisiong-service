@@ -73,14 +73,14 @@
         @JsonProperty("subscription")
         private Integer subscription;
 
-        @JsonProperty("contact_name")
+/*        @JsonProperty("contact_name")
         private String contactName;
 
         @JsonProperty("contact_email")
         private String contactEmail;
 
         @JsonProperty("contact_number")
-        private String contactNumber;
+        private String contactNumber;*/
 
         @JsonProperty("billing_account_ref")
         private String billingAccountRef;

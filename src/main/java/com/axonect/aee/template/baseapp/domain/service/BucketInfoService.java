@@ -11,7 +11,6 @@ import com.axonect.aee.template.baseapp.domain.mappers.ServiceInfoMapper;
 import com.axonect.aee.template.baseapp.domain.util.LogMessages;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -26,16 +25,12 @@ import java.util.List;
 @Slf4j
 public class BucketInfoService {
 
-    @Autowired
-    BucketInstanceRepository bucketInstanceRepository;
-    @Autowired
-    ServiceInstanceRepository serviceInstanceRepository;
-    @Autowired
-    UserRepository userRepository;
-    @Autowired
-    ServiceInfoMapper mapper;
+    private final BucketInstanceRepository bucketInstanceRepository;
+    private final ServiceInstanceRepository serviceInstanceRepository;
+    private final UserRepository userRepository;
+    private final ServiceInfoMapper mapper;
 
-
+    @SuppressWarnings("squid:S107")
     public BaseResponse<List<ServiceInfo>> getServiceInfo(
             String username,
             String serviceId,
@@ -56,11 +51,13 @@ public class BucketInfoService {
             log.debug("Fetched groupId={} for username={}", groupId, username);
 
             List<String> usernames = new ArrayList<>();
-            if (isGroup == null || isGroup)
-                if (groupId != null && !groupId.equalsIgnoreCase(username)) {
-                    usernames.add(groupId);
-                    log.debug("Including groupId in search usernames list: {}", groupId);
-                }
+            if ((isGroup == null || isGroup)
+                    && groupId != null
+                    && !groupId.equalsIgnoreCase(username)) {
+
+                usernames.add(groupId);
+                log.debug("Including groupId in search usernames list: {}", groupId);
+            }
             if (isGroup == null || !isGroup) {
                 usernames.add(username);
                 log.debug("Including main username in search usernames list: {}", username);
@@ -117,7 +114,6 @@ public class BucketInfoService {
 
     public BaseResponse<List<BucketInfo>> getBucketInfoByServiceId(Long serviceId) throws AAAException {
 
-        {
             try {
                 log.info("Fetching bucket info with speed for serviceId={}", serviceId);
 
@@ -168,6 +164,6 @@ public class BucketInfoService {
                 );
             }
         }
-    }
+
 
 }

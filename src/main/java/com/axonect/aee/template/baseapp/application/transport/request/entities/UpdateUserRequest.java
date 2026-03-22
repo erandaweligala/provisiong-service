@@ -100,14 +100,14 @@ public class UpdateUserRequest {
     @JsonProperty("subscription")
     private Integer subscription; // 0 = Prepaid, 1 = Postpaid, 2 = Hybrid // 0 = Prepaid, 1 = Postpaid, 2 = Hybrid
 
-    @JsonProperty("contact_name")
+/*    @JsonProperty("contact_name")
     private String contactName;
 
     @JsonProperty("contact_email")
     private String contactEmail;
 
     @JsonProperty("contact_number")
-    private String contactNumber;
+    private String contactNumber;*/
 
     @JsonProperty("concurrency")
     private Integer concurrency;
@@ -119,7 +119,11 @@ public class UpdateUserRequest {
     private String sessionTimeout;
 
     @JsonProperty("request_id")
-    @NotBlank(message = "Request ID is mandatory")
+    @NotBlank(message = "request_id is mandatory")
+    @Pattern(
+            regexp = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            message = "request_id must be a valid UUID format (e.g. 550e8400-e29b-41d4-a716-446655440000)"
+    )
     private String requestId;
 
     @JsonProperty("template_id")

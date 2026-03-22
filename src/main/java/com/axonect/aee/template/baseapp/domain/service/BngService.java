@@ -69,12 +69,13 @@ public class BngService {
 
             validateStatus(request.getStatus());
 
-            if (idExists.join()) {
+            if (Boolean.TRUE.equals(idExists.join())) {
                 log.warn(LogMessages.BNG_DUPLICATE_ID, request.getBngId());
                 throw new AAAException(LogMessages.BNG_DUPLICATE,
                         "BNG ID '" + request.getBngId() + "'" + ALREADY_EXIST, HttpStatus.CONFLICT);
             }
-            if (nameExists.join()) {
+
+            if (Boolean.TRUE.equals(nameExists.join())) {
                 log.warn(LogMessages.BNG_DUPLICATE_NAME, request.getBngName());
                 throw new AAAException(LogMessages.BNG_DUPLICATE,
                         "BNG name '" + request.getBngName() + "'" + ALREADY_EXIST, HttpStatus.CONFLICT);
@@ -141,10 +142,6 @@ public class BngService {
      */
     private void publishBngCreatedEvents(BngEntity bng) {
         try {
-            /*// Publish BngEvent
-            BngEvent bngEvent = eventMapper.toBngEvent(bng);
-            PublishResult eventResult = kafkaEventPublisher.publishBngEvent("BNG_CREATED", bngEvent);*/
-
             // Publish DBWriteRequestGeneric
             DBWriteRequestGeneric dbEvent = eventMapper.toBngDBWriteEvent(CREATE, bng);
             PublishResult dbResult = kafkaEventPublisher.publishBngDBWriteEvent(dbEvent);
@@ -153,12 +150,12 @@ public class BngService {
                 log.error("Complete failure publishing BNG creation events for BNG '{}'", bng.getBngId());
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        "Failed to publish BNG created events to Kafka",
+                        "Something went wrong",
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
 
-            if (!dbResult.isDcSuccess()) {
+            if (!dbResult.isSuccess()) {
                 log.warn("Failed to publish BNG creation events to DC cluster for BNG '{}'", bng.getBngId());
             }
 
@@ -166,7 +163,7 @@ public class BngService {
             log.error("Failed to publish BNG created events for '{}'", bng.getBngId(), e);
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish BNG created events",
+                    "Something went wrong",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -177,10 +174,6 @@ public class BngService {
      */
     private void publishBngUpdatedEvents(BngEntity bng) {
         try {
-            /*// Publish BngEvent
-            BngEvent bngEvent = eventMapper.toBngEvent(bng);
-            PublishResult eventResult = kafkaEventPublisher.publishBngEvent("BNG_UPDATED", bngEvent);*/
-
             // Publish DBWriteRequestGeneric
             DBWriteRequestGeneric dbEvent = eventMapper.toBngDBWriteEvent(UPDATE, bng);
             PublishResult dbResult = kafkaEventPublisher.publishBngDBWriteEvent(dbEvent);
@@ -190,7 +183,7 @@ public class BngService {
                 log.error("Complete failure publishing BNG update events for BNG '{}'", bng.getBngId());
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        "Failed to publish BNG update events to Kafka",
+                        "Something went wrong",
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
@@ -199,35 +192,12 @@ public class BngService {
             log.error("Failed to publish BNG updated events for '{}'", bng.getBngId(), e);
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish BNG updated events",
+                    "Something went wrong",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
     }
 
-    /**
-     * Publish BNG deleted events to Kafka
-     *//*
-    private void publishBngDeletedEvents(BngEntity bng) {
-        try {
-            // Publish BngEvent
-            BngEvent bngEvent = eventMapper.toBngEvent(bng);
-            kafkaEventPublisher.publishBngEvent("BNG_DELETED", bngEvent);
-
-            // Publish DBWriteRequestGeneric
-            DBWriteRequestGeneric dbEvent = eventMapper.toBngDBWriteEvent(DELETE, bng);
-            kafkaEventPublisher.publishBngDBWriteEvent(dbEvent);
-
-        } catch (Exception e) {
-            log.error("Failed to publish BNG deleted events for '{}'", bng.getBngId(), e);
-            throw new AAAException(
-                    LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish BNG deleted events",
-                    HttpStatus.INTERNAL_SERVER_ERROR
-            );
-        }
-    }
-*/
     /**
      * Get a simple list of all BNG names and IPs without pagination.
      *
@@ -258,28 +228,6 @@ public class BngService {
                     "BNG_LIST_ERROR",
                     "Error retrieving BNG list",
                     HttpStatus.INTERNAL_SERVER_ERROR
-            );
-        }
-    }
-
-    private void validateDuplicateBngId(BngCreateRequest request) {
-        if (bngRepository.existsByBngId(request.getBngId())) {
-            log.warn(LogMessages.BNG_DUPLICATE_ID, request.getBngId());
-            throw new AAAException(
-                    LogMessages.BNG_DUPLICATE,
-                    "BNG ID '" + request.getBngId() + "'" + ALREADY_EXIST,
-                    HttpStatus.CONFLICT
-            );
-        }
-    }
-
-    private void validateDuplicateBngName(BngCreateRequest request) {
-        if (bngRepository.existsByBngName(request.getBngName())) {
-            log.warn(LogMessages.BNG_DUPLICATE_NAME, request.getBngName());
-            throw new AAAException(
-                    LogMessages.BNG_DUPLICATE,
-                    "BNG name '" + request.getBngName() + "'" + ALREADY_EXIST,
-                    HttpStatus.CONFLICT
             );
         }
     }

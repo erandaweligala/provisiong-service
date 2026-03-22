@@ -10,22 +10,19 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class PublishResult {
-    private boolean dcSuccess;
-    private boolean drSuccess;
-    private String dcError;
-    private String drError;
-    private long dcLatencyMs;
-    private long drLatencyMs;
+    private boolean Success;
+    private String Error;
+    private long LatencyMs;
 
     public boolean isOverallSuccess() {
-        return dcSuccess || drSuccess; // At least one succeeded
+        return Success; // At least one succeeded
     }
 
-    public boolean isBothSuccess() {
-        return dcSuccess && drSuccess;
+    public boolean isSuccess() {
+        return Success;
     }
 
     public boolean isCompleteFailure() {
-        return !dcSuccess && !drSuccess;
+        return !Success;
     }
 }

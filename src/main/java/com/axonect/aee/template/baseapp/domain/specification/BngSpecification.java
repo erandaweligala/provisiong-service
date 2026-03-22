@@ -8,7 +8,12 @@ import jakarta.persistence.criteria.Predicate;
 import java.util.ArrayList;
 import java.util.List;
 
+
 public class BngSpecification {
+
+    private BngSpecification() {
+        throw new UnsupportedOperationException("Utility class cannot be instantiated");
+    }
 
     public static Specification<BngEntity> filterBng(BngFilterRequest filter) {
         return (root, query, criteriaBuilder) -> {

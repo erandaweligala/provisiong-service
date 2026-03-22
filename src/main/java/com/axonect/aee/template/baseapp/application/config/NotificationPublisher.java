@@ -30,7 +30,7 @@ public class NotificationPublisher {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
 
-    @Value("${app.kafka.notification-topic}")
+    @Value("${app.kafka.topic.notification}")
     private String notificationTopic;
 
     /**

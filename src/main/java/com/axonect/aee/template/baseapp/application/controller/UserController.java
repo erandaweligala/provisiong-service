@@ -10,6 +10,7 @@
     import com.axonect.aee.template.baseapp.domain.util.LoggableAction;
     import com.fasterxml.jackson.annotation.JsonInclude;
     import jakarta.validation.Valid;
+    import jakarta.validation.constraints.Pattern;
     import lombok.AllArgsConstructor;
     import lombok.Getter;
     import lombok.RequiredArgsConstructor;
@@ -278,7 +279,11 @@
         public ResponseEntity<ApiResponse> updateService(
                 @PathVariable("user_id") String userId,
                 @PathVariable("plan_id") String planId,
-                @PathVariable("request_id") String requestId,
+                @PathVariable("request_id")
+                @Pattern(
+                        regexp = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                        message = "request_id must be a valid UUID format (e.g. 550e8400-e29b-41d4-a716-446655440000)"
+                ) String requestId,
                 @Valid @RequestBody UpdateRequestDTO updateDto) {
 
             log.info("Received service update request for user: {}, plan: {}, request: {}",
@@ -306,7 +311,10 @@
         public ResponseEntity<ApiResponse> deleteService(
                 @PathVariable("user_id") String userId,
                 @PathVariable("plan_id") String planId,
-                @PathVariable("request_id") String requestId) {
+                @PathVariable("request_id") @Pattern(
+                        regexp = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                        message = "request_id must be a valid UUID format (e.g. 550e8400-e29b-41d4-a716-446655440000)"
+                ) String requestId) {
 
             log.info("Received service delete request for user: {}, plan: {}, request: {}",
                     userId, planId, requestId);
@@ -317,7 +325,7 @@
 
             return ResponseEntity.ok(
                     ApiResponse.success(
-                            requestId,                       
+                            requestId,
                             "AAA_200_SUCCESS",
                             "Service deleted successfully",
                             response

@@ -10,6 +10,10 @@ import java.util.List;
 
 public class TemplateSpecification {
 
+    private TemplateSpecification() {
+        throw new UnsupportedOperationException("Utility class cannot be instantiated");
+    }
+
     public static Specification<SuperTemplate> filterTemplate(TemplateFilterRequest filter) {
         return (root, query, criteriaBuilder) -> {
             List<Predicate> predicates = new ArrayList<>();

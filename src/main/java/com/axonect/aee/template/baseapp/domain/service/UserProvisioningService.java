@@ -68,7 +68,10 @@ public class UserProvisioningService {
     private static final String ALREADY_EXISTS = "' already exists";
     private static final String MSG_TYPE_USER_CREATION = "USER_CREATION";
     private static final String MSG_TYPE_USER_UPDATE   = "USER_UPDATE";
-    private static final String MSG_TYPE_USER_DELETION = "USER_DELETION";// ← ADD
+    private static final String MSG_TYPE_USER_DELETION = "USER_DELETION";
+    private static final String USER_NOT_FOUND = "User '%s' not found";
+    private static final String NOTIFICATION_SKIPPED = "notification skipped for user '{}'";
+
 
 
 
@@ -129,8 +132,8 @@ public class UserProvisioningService {
             validateGroupBillingConsistency(request);
             Long templateId = getTemplateIdOrDefault(request);
             validateEncryptionMethod(request);
-            validateContactNumbers(request);
-            validateContactEmails(request);
+            //validateContactNumbers(request);
+            //validateContactEmails(request);
             validateNasPortType(request);
             validateIpAllocationValue(request);
             validateNetworkRules(request);
@@ -325,7 +328,7 @@ public class UserProvisioningService {
             UserEntity user = userRepository.findByUserName(userName)
                     .orElseThrow(() -> new AAAException(
                             LogMessages.ERROR_NOT_FOUND,
-                            String.format("User '%s' not found", userName),
+                            String.format(USER_NOT_FOUND, userName),
                             HttpStatus.NOT_FOUND
                     ));
 
@@ -421,10 +424,10 @@ public class UserProvisioningService {
             List<String> userNames = userPage.getContent().stream()
                     .map(UserEntity::getUserName)
                     .toList();
-            Map<String, String> macMap = new java.util.HashMap<>();
+            Map<String, String> macMap = new HashMap<>();
             if (!userNames.isEmpty()) {
                 userToMacRepository.findByUserNameIn(userNames).stream()
-                        .collect(java.util.stream.Collectors.groupingBy(UserToMac::getUserName))
+                        .collect(Collectors.groupingBy(UserToMac::getUserName))
                         .forEach((name, macs) -> macMap.put(name,
                                 macs.stream().map(UserToMac::getOriginalMacAddress)
                                         .collect(Collectors.joining(", "))));
@@ -651,7 +654,7 @@ public class UserProvisioningService {
             UserEntity user = userRepository.findByUserName(userName)
                     .orElseThrow(() -> new AAAException(
                             LogMessages.ERROR_NOT_FOUND,
-                            String.format("User '%s' not found", userName),
+                            String.format(USER_NOT_FOUND, userName),
                             HttpStatus.NOT_FOUND
                     ));
 
@@ -702,7 +705,7 @@ public class UserProvisioningService {
                                 .uplink(bucket.getUpLink())
                                 .build())
                         .build())
-                .collect(Collectors.toList());
+                .toList();
     }
 
     private Integer mapStatusToCode(String status) {
@@ -740,35 +743,43 @@ public class UserProvisioningService {
             UserEntity user = userRepository.findByUserName(userName)
                     .orElseThrow(() -> new AAAException(
                             LogMessages.ERROR_NOT_FOUND,
-                            String.format("User '%s' not found", userName),
+                            String.format(USER_NOT_FOUND, userName),
                             HttpStatus.NOT_FOUND
                     ));
 
             MDC.put(USERID, user.getUserId());
 
-            // All validations (including status with CoA)
+            // CAPTURE OLD STATUS BEFORE APPLY
+            UserStatus oldStatus = user.getStatus();
+
             asyncValidateUpdate(user, request);
-            validateAndApplyUpdates(user, request); // ← This handles status + CoA
+            validateAndApplyUpdates(user, request);
             user.setUpdatedDate(LocalDateTime.now());
 
-            // Set MAC addresses in transient field if updated
+            // Determine new status after apply
+            UserStatus newStatus = user.getStatus();
+
+            // Fire CoA async if status actually changed
+            if (request.getStatus() != null && oldStatus != newStatus) {
+                String capturedUserName = user.getUserName();   // effectively final for lambda
+                CompletableFuture.runAsync(
+                        () -> sendCoAAsync(capturedUserName, oldStatus, newStatus)
+                );
+            }
+
             if (request.getMacAddress() != null) {
                 user.setMacAddress(request.getMacAddress());
             } else {
-                // Fetch existing MACs for response
                 enrichUserWithMacAddresses(user);
             }
 
-            // Fetch template name async while publishing to Kafka
             CompletableFuture<String> templateNameFuture = (user.getTemplateId() != null)
                     ? CompletableFuture.supplyAsync(() ->
-                            superTemplateRepository.findById(user.getTemplateId())
-                                    .map(SuperTemplate::getTemplateName).orElse(null))
+                    superTemplateRepository.findById(user.getTemplateId())
+                            .map(SuperTemplate::getTemplateName).orElse(null))
                     : CompletableFuture.completedFuture(null);
 
-            // Publish to Kafka (blocking — must succeed)
             publishUserUpdatedEvents(user);
-            // Notification is best-effort, run async
             CompletableFuture.runAsync(() -> sendUserUpdateNotification(user));
 
             user.setTemplateName(templateNameFuture.join());
@@ -1124,13 +1135,12 @@ public class UserProvisioningService {
             if (result.isCompleteFailure()) {
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        result.getDcError(),
+                        result.getError(),
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
 
-            if (!result.isDcSuccess()) log.warn("Failed to publish to DC cluster for user '{}'", user.getUserName());
-            if (!result.isDrSuccess()) log.warn("Failed to publish to DR cluster for user '{}'", user.getUserName());
+            if (!result.isSuccess()) log.warn("Failed to publish to DC cluster for user '{}'", user.getUserName());
 
         } catch (AAAException ex) {
             throw ex;
@@ -1212,7 +1222,7 @@ public class UserProvisioningService {
                             .columnValues(cols)
                             .build();
                 })
-                .collect(Collectors.toList());
+                .toList();
     }
 
     // NEW helper — builds a MAC DELETE event
@@ -1224,252 +1234,6 @@ public class UserProvisioningService {
                 .tableName(AAA_USER_MAC)
                 .whereConditions(Map.of(USER_NAME, userName))
                 .build();
-    }
-
-
-    private void updateMacAddressesWithRetry(String userName, String macAddressString) {
-        try {
-            List<String> macList = extractValidMacs(macAddressString);
-
-            // Step 1: Publish DELETE
-            log.info("Publishing MAC DELETE event for user '{}'", userName);
-            publishMacAddressDeleteEvent(userName);
-
-            // Step 2: Minimal wait for DELETE to propagate via Kafka consumer
-            Thread.sleep(50);
-
-            // Step 3: Publish INSERTs sequentially with tiny gap
-            List<String> failedMacs = new ArrayList<>();
-            int successCount = 0;
-
-            for (int i = 0; i < macList.size(); i++) {
-                String mac = macList.get(i);
-
-                boolean success = processSingleMac(userName, mac, failedMacs);
-                if (success) {
-                    successCount++;
-                }
-
-                // No inter-MAC delay needed — Kafka publish is already synchronous
-            }
-
-            // Step 4: Fail loudly if any MAC failed
-            if (!failedMacs.isEmpty()) {
-                log.error("Failed to publish {}/{} MAC addresses for user '{}'. Failed MACs: {}",
-                        failedMacs.size(), macList.size(), userName, String.join(", ", failedMacs));
-                throw new AAAException(
-                        LogMessages.ERROR_INTERNAL_ERROR,
-                        "MAC address update incomplete. Failed to publish: " + String.join(", ", failedMacs),
-                        HttpStatus.INTERNAL_SERVER_ERROR
-                );
-            }
-
-            log.info("Successfully published {}/{} MAC addresses for user '{}'",
-                    successCount, macList.size(), userName);
-
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.error("Thread interrupted during MAC update for user '{}'", userName, e);
-            throw new AAAException(
-                    LogMessages.ERROR_INTERNAL_ERROR,
-                    "MAC address update was interrupted",
-                    HttpStatus.INTERNAL_SERVER_ERROR
-            );
-        } catch (AAAException ex) {
-            throw ex;
-        } catch (Exception e) {
-            log.error("Failed to update MAC addresses for user '{}'", userName, e);
-            throw new AAAException(
-                    LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to update MAC addresses",
-                    HttpStatus.INTERNAL_SERVER_ERROR
-            );
-        }
-    }
-
-    /*private void publishUserDeletedEvents(UserEntity user) {
-        try {
-
-            DBWriteRequestGeneric dbEvent = eventMapper.toDBWriteEvent(DELETE, user, AAA_USER);
-            kafkaEventPublisher.publishDBWriteEvent(dbEvent);
-
-            //  PUBLISH MAC ADDRESS DELETE EVENT
-            publishMacAddressEvents(DELETE, user.getUserName(), null);
-
-        } catch (Exception e) {
-            log.error("Failed to publish user deleted events for '{}'", user.getUserName(), e);
-        }
-    }*/
-
-    private void publishMacAddressEvents(String eventType, String userName, String macAddressString) {
-        try {
-            if (DELETE.equals(eventType)) {
-                publishMacAddressDeleteEvent(userName);
-                return;
-            }
-
-            if (CREATE.equals(eventType)) {
-                publishMacAddressCreateEventsWithValidation(userName, macAddressString);
-            }
-
-        } catch (Exception e) {
-            log.error("Failed to publish MAC address events for user '{}'", userName, e);
-        }
-    }
-
-    private int publishMacAddressCreateEventsWithValidation(String userName, String macAddressString) {
-
-        if (isMacStringEmpty(macAddressString)) {
-            return 0;
-        }
-
-        List<String> macList = extractValidMacs(macAddressString);
-        int successCount = 0;
-        List<String> failedMacs = new ArrayList<>();
-
-        for (String mac : macList) {
-            if (processSingleMac(userName, mac, failedMacs)) {
-                successCount++;
-            }
-        }
-
-        logMacSummary(userName, successCount, macList.size(), failedMacs);
-
-        return successCount;
-    }
-
-    private boolean isMacStringEmpty(String macAddressString) {
-        return macAddressString == null || macAddressString.isBlank();
-    }
-
-    private List<String> extractValidMacs(String macAddressString) {
-        return Arrays.stream(macAddressString.split(","))
-                .map(String::trim)
-                .filter(mac -> !mac.isEmpty())
-                .toList();
-    }
-
-    private boolean processSingleMac(String userName, String mac, List<String> failedMacs) {
-
-        try {
-            String normalizedMac = normalizeMacAddress(mac);
-
-            DBWriteRequestGeneric request = buildMacCreateEvent(userName, mac, normalizedMac);
-
-            PublishResult result = kafkaEventPublisher.publishDBWriteEvent(request);
-
-            return handlePublishResult(result, userName, mac, failedMacs);
-
-        } catch (Exception e) {
-            log.error("Error processing MAC '{}' for user '{}'", mac, userName, e);
-            failedMacs.add(mac);
-            return false;
-        }
-    }
-    private DBWriteRequestGeneric buildMacCreateEvent(String userName,
-                                                      String originalMac,
-                                                      String normalizedMac) {
-
-        String timestamp = LocalDateTime.now()
-                .format(DateTimeFormatter.ofPattern(DATE_PATTERN));
-
-        Map<String, Object> columnValues = new HashMap<>();
-        columnValues.put(USER_NAME, userName);
-        columnValues.put("MAC_ADDRESS", normalizedMac);
-        columnValues.put("ORIGINAL_MAC_ADDRESS", originalMac);
-        columnValues.put("CREATED_DATE", timestamp);
-
-        return DBWriteRequestGeneric.builder()
-                .eventType(CREATE)
-                .timestamp(timestamp)
-                .userName(userName)
-                .columnValues(columnValues)
-                .tableName(AAA_USER_MAC)
-                .build();
-    }
-
-    private boolean handlePublishResult(PublishResult result,
-                                        String userName,
-                                        String mac,
-                                        List<String> failedMacs) {
-
-        if (result.isCompleteFailure()) {
-            log.error("Failed to publish MAC create event for MAC '{}' (user: '{}')", mac, userName);
-            failedMacs.add(mac);
-            return false;
-        }
-
-        log.debug("Successfully published MAC create event for MAC '{}' (user: '{}')", mac, userName);
-
-        if (!result.isDcSuccess()) {
-            log.warn("MAC create failed on DC cluster for MAC '{}' (user: '{}')", mac, userName);
-        }
-
-        if (!result.isDrSuccess()) {
-            log.warn("MAC create failed on DR cluster for MAC '{}' (user: '{}')", mac, userName);
-        }
-
-        return true;
-    }
-
-    private void logMacSummary(String userName,
-                               int successCount,
-                               int totalMacs,
-                               List<String> failedMacs) {
-
-        if (!failedMacs.isEmpty()) {
-            log.error("Failed to publish {} out of {} MAC addresses for user '{}'. Failed MACs: {}",
-                    failedMacs.size(), totalMacs, userName, String.join(", ", failedMacs));
-        }
-
-        log.info("MAC address creation summary for user '{}': {}/{} successful",
-                userName, successCount, totalMacs);
-    }
-
-
-
-
-
-
-
-    private void publishMacAddressDeleteEvent(String userName) {
-        try {
-            DBWriteRequestGeneric macEvent = DBWriteRequestGeneric.builder()
-                    .eventType(DELETE)
-                    .timestamp(LocalDateTime.now().format(DateTimeFormatter.ofPattern(DATE_PATTERN)))
-                    .userName(userName)
-                    .tableName(AAA_USER_MAC)
-                    .whereConditions(Map.of(USER_NAME, userName))
-                    .build();
-
-            PublishResult result = kafkaEventPublisher.publishDBWriteEvent(macEvent);
-
-            if (result.isCompleteFailure()) {
-                log.error("Failed to publish MAC delete event for user '{}'", userName);
-                throw new AAAException(
-                        LogMessages.ERROR_INTERNAL_ERROR,
-                        "Failed to delete existing MAC addresses",
-                        HttpStatus.INTERNAL_SERVER_ERROR
-                );
-            }
-
-            if (!result.isDcSuccess()) {
-                log.warn("MAC delete failed on DC cluster for user '{}'", userName);
-            }
-            if (!result.isDrSuccess()) {
-                log.warn("MAC delete failed on DR cluster for user '{}'", userName);
-            }
-
-            log.debug("Successfully published MAC delete event for user '{}'", userName);
-
-        } catch (Exception e) {
-            log.error("Error publishing MAC delete event for user '{}'", userName, e);
-            throw new AAAException(
-                    LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to delete existing MAC addresses",
-                    HttpStatus.INTERNAL_SERVER_ERROR
-            );
-        }
     }
 
     // KEEP for READ-ONLY operations (fetching existing MACs)
@@ -1701,7 +1465,7 @@ public class UserProvisioningService {
             }
         }
     }
-    @SneakyThrows
+    /*@SneakyThrows
     private void validateContactNumbers(CreateUserRequest request) {
         if (request.getContactNumber() == null || request.getContactNumber().isBlank()) {
             return;
@@ -1723,8 +1487,8 @@ public class UserProvisioningService {
                 );
             }
         }
-    }
-    @SneakyThrows
+    }*/
+    /*@SneakyThrows
     private void validateContactNumbersForUpdate(UpdateUserRequest request) {
         if (request.getContactNumber() == null || request.getContactNumber().isBlank()) {
             return;
@@ -1793,7 +1557,7 @@ public class UserProvisioningService {
                 );
             }
         }
-    }
+    }*/
 
     private void validateConcurrencyAndStatus(CreateUserRequest request) {
 
@@ -1819,31 +1583,15 @@ public class UserProvisioningService {
 
 
     void validateAndApplyUpdates(UserEntity user, UpdateUserRequest request) {
-        // Validate encryption method first if password is being updated
         validateEncryptionMethodForUpdate(request);
-        validateContactNumbersForUpdate(request);
-        validateContactEmailsForUpdate(request);
+        //validateContactNumbersForUpdate(request);
+        //validateContactEmailsForUpdate(request);
         validateAndUpdateGroupBilling(user, request);
 
-        // CAPTURE OLD STATUS BEFORE ANY UPDATES
-        UserStatus oldStatus = user.getStatus();
-
-        // STATUS UPDATE WITH COA LOGIC
+        // STATUS: validate and apply — NO CoA here anymore
         if (request.getStatus() != null) {
             validateStatusValue(request.getStatus());
-            UserStatus newStatus = parseStatus(request.getStatus());
-
-            // CHECK IF STATUS ACTUALLY CHANGED AND NOT FROM INACTIVE
-            if (oldStatus != newStatus) {
-                log.info("User '{}' status changing from {} to {}",
-                        user.getUserName(), oldStatus, newStatus);
-
-                // SEND COA REQUEST TO ACCOUNTING SERVICE
-                // Will automatically skip if oldStatus is INACTIVE
-                coaManagementService.sendCoARequest(user.getUserName(), oldStatus, newStatus);
-            }
-
-            user.setStatus(newStatus);
+            user.setStatus(parseStatus(request.getStatus()));
         }
 
         updateNasPortType(user, request);
@@ -1855,7 +1603,7 @@ public class UserProvisioningService {
         updateIpAllocation(user, request);
         updateIpFields(user, request);
         updateBilling(user, request);
-        updateContactFields(user, request);
+        //updateContactFields(user, request);
         updateConcurrency(user, request);
         updateTimeoutFields(user, request);
         updateMiscFields(user, request);
@@ -2130,7 +1878,7 @@ public class UserProvisioningService {
         }
     }
 
-    private void updateContactFields(UserEntity user, UpdateUserRequest request) {
+    /*private void updateContactFields(UserEntity user, UpdateUserRequest request) {
         if (request.getContactName() != null) {
             user.setContactName(request.getContactName());
         }
@@ -2140,7 +1888,7 @@ public class UserProvisioningService {
         if (request.getContactNumber() != null) {
             user.setContactNumber(request.getContactNumber());
         }
-    }
+    }*/
     void validateIpAllocation(String ipAllocation) {
         if (ipAllocation == null || ipAllocation.isBlank()) {
             return; // null/blank is acceptable for updates
@@ -2407,9 +2155,9 @@ public class UserProvisioningService {
                 .templateId(templateId)
                 .status(request.getStatus() != null ? userStatus : null)
                 .subscription(request.getSubscription() != null ? subscription : null)
-                .contactName(request.getContactName())
-                .contactEmail(request.getContactEmail())
-                .contactNumber(request.getContactNumber())
+                //.contactName(request.getContactName())
+                //.contactEmail(request.getContactEmail())
+                //.contactNumber(request.getContactNumber())
                 .concurrency(request.getConcurrency())
                 .billing(request.getBilling()!=null? request.getBilling() : "2")
                 .cycleDate(request.getCycleDate())
@@ -2420,13 +2168,6 @@ public class UserProvisioningService {
     }
     private CreateUserResponse mapToCreateUserResponse(UserEntity user) {
         // Fetch MAC addresses for the user
-        List<UserToMac> macAddresses = userToMacRepository.findByUserName(user.getUserName());
-        String macString = null;
-        if (!macAddresses.isEmpty()) {
-            macString = macAddresses.stream()
-                    .map(UserToMac::getOriginalMacAddress)
-                    .collect(Collectors.joining(", "));
-        }
 
         return CreateUserResponse.builder()
                 .userId(user.getUserId())
@@ -2446,9 +2187,9 @@ public class UserProvisioningService {
                 .templateName(user.getTemplateName())
                 .status(user.getStatus() != null ? user.getStatus().getCode() : null)
                 .subscription(user.getSubscription() != null ? user.getSubscription().getCode() : null)
-                .contactName(user.getContactName())
-                .contactEmail(user.getContactEmail())
-                .contactNumber(user.getContactNumber())
+                //.contactName(user.getContactName())
+               // .contactEmail(user.getContactEmail())
+                //.contactNumber(user.getContactNumber())
                 .concurrency(user.getConcurrency())
                 .billing(user.getBilling())
                 .cycleDate(user.getCycleDate())
@@ -2481,26 +2222,14 @@ public class UserProvisioningService {
                 .ipv6(user.getIpv6())
                 .status(user.getStatus() != null ? user.getStatus().getCode() : null) // Get code from enum
                 .subscription(user.getSubscription() != null ? user.getSubscription().getCode() : null)
-                .contactName(user.getContactName())
-                .contactEmail(user.getContactEmail())
-                .contactNumber(user.getContactNumber())
+                //.contactName(user.getContactName())
+                //.contactEmail(user.getContactEmail())
+                //.contactNumber(user.getContactNumber())
                 .templateId(user.getTemplateId())
                 .templateName(user.getTemplateName())
                 .billingAccountRef(user.getBillingAccountRef())
                 .createdDate(user.getCreatedDate() != null ? LocalDateTime.parse(user.getCreatedDate().toString()) : null)
                 .build();
-    }
-
-    private UserResponse mapToResponse(UserEntity user) {
-        // Fetch MAC addresses for the user (used for single-user lookups)
-        List<UserToMac> macAddresses = userToMacRepository.findByUserName(user.getUserName());
-        String macString = null;
-        if (!macAddresses.isEmpty()) {
-            macString = macAddresses.stream()
-                    .map(UserToMac::getOriginalMacAddress)
-                    .collect(Collectors.joining(", "));
-        }
-        return mapToResponse(user, macString);
     }
 
     private UserResponse mapToResponse(UserEntity user, String macString) {
@@ -2521,9 +2250,9 @@ public class UserProvisioningService {
                 .ipv6(user.getIpv6())
                 .status(user.getStatus() != null ? user.getStatus().getCode() : null)
                 .subscription(user.getSubscription() != null ? user.getSubscription().getCode() : null)
-                .contactName(user.getContactName())
-                .contactEmail(user.getContactEmail())
-                .contactNumber(user.getContactNumber())
+                //.contactName(user.getContactName())
+                //.contactEmail(user.getContactEmail())
+                //.contactNumber(user.getContactNumber())
                 .concurrency(user.getConcurrency())
                 .billing(user.getBilling())
                 .cycleDate(user.getCycleDate())
@@ -2644,7 +2373,7 @@ public class UserProvisioningService {
                             },
                             () -> log.info(
                                     "No USER_CREATION child template for superTemplateId={}, " +
-                                            "notification skipped for user '{}'",
+                                            NOTIFICATION_SKIPPED,
                                     user.getTemplateId(), user.getUserName())
                     );
         } catch (Exception e) {
@@ -2669,7 +2398,7 @@ public class UserProvisioningService {
                             },
                             () -> log.info(
                                     "No USER_UPDATE child template for superTemplateId={}, " +
-                                            "notification skipped for user '{}'",
+                                            NOTIFICATION_SKIPPED,
                                     user.getTemplateId(), user.getUserName())
                     );
         } catch (Exception e) {
@@ -2688,12 +2417,28 @@ public class UserProvisioningService {
                             },
                             () -> log.info(
                                     "No USER_DELETION child template for superTemplateId={}, " +
-                                            "notification skipped for user '{}'",
+                                            NOTIFICATION_SKIPPED,
                                     user.getTemplateId(), user.getUserName())
                     );
         } catch (Exception e) {
             log.warn("Failed to send USER_DELETION notification for user '{}': {}",
                     user.getUserName(), e.getMessage(), e);
+        }
+    }
+    /**
+     * Sends a CoA request asynchronously.
+     * Best-effort: failure is logged but never blocks the update response.
+     * CoA targets live sessions on the NAS — a delay or failure here
+     * does NOT roll back the DB state change.
+     */
+    private void sendCoAAsync(String userName, UserStatus oldStatus, UserStatus newStatus) {
+        try {
+            log.info("Sending async CoA for user '{}': {} → {}", userName, oldStatus, newStatus);
+            coaManagementService.sendCoARequest(userName, oldStatus, newStatus);
+            log.info("Async CoA completed for user '{}'", userName);
+        } catch (Exception e) {
+            log.warn("Async CoA failed for user '{}' (status {} → {}): {}",
+                    userName, oldStatus, newStatus, e.getMessage(), e);
         }
     }
 }

@@ -8,10 +8,8 @@ import com.axonect.aee.template.baseapp.application.transport.response.transform
 import com.axonect.aee.template.baseapp.application.transport.response.transformers.DeleteResponseDTO;
 import com.axonect.aee.template.baseapp.application.transport.response.transformers.UpdateResponseDTO;
 import com.axonect.aee.template.baseapp.domain.entities.dto.*;
-import com.axonect.aee.template.baseapp.domain.events.BucketEvent;
 import com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric;
 import com.axonect.aee.template.baseapp.domain.events.EventMapper;
-import com.axonect.aee.template.baseapp.domain.events.ServiceEvent;
 import com.axonect.aee.template.baseapp.domain.events.PublishResult;
 import com.axonect.aee.template.baseapp.domain.exception.AAAException;
 import com.axonect.aee.template.baseapp.domain.util.LogMessages;
@@ -23,15 +21,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -51,33 +45,35 @@ public class ServiceProvisioningService {
 
     private static final String ACTIVE = "Active";
     private static final String INACTIVE = "Inactive";
+    private static final String CREATED = "CREATE";
+    private static final String DELETE = "DELETE";
+    private static final String UPDATE = "UPDATE";
+    private static final String SUSPENDED = "Suspended";
 
-    //   MANUAL ID GENERATION (since no @PrePersist)
     /**
-     * Generates a fast, non-cryptographic service ID.
-     * <p>
-     * This ID is intended for internal identification only and
-     * does not require cryptographic randomness.
+     * Generates a fast, non-cryptographic internal ID.
+     * This is used for internal correlation only and does NOT require
+     * cryptographic randomness.
      */
     @SuppressWarnings("java:S2245")
-    private Long generateServiceId() {
+    private Long generateInternalId() {
         long timestampPart = System.currentTimeMillis() % 1_000_000;
         int random = ThreadLocalRandom.current().nextInt(10_000);
         return timestampPart * 10_000L + random;
     }
 
+    /**
+     * Generates a service ID.
+     */
+    private Long generateServiceId() {
+        return generateInternalId();
+    }
 
     /**
-     * Generates a non-cryptographic, fast unique bucket instance ID.
-     * <p>
-     * This ID is used for internal correlation only and does NOT require
-     * cryptographic randomness.
+     * Generates a bucket instance ID.
      */
-    @SuppressWarnings("java:S2245")
     private Long generateBucketInstanceId() {
-        long timestampPart = System.currentTimeMillis() % 1_000_000;
-        int random = ThreadLocalRandom.current().nextInt(10_000);
-        return timestampPart * 10_000L + random;
+        return generateInternalId();
     }
 
 
@@ -207,7 +203,7 @@ public class ServiceProvisioningService {
             validateUserStatus(user, "Group Service Activation");
 
             Plan plan = planFuture.join();
-            log.debug("Plan found: {} ({}), Recurring: {}", plan.getPlanName(), plan.getPlanType(), plan.getRecurringFlag());
+            log.debug("Plan was found: {} ({}), Recurring: {}", plan.getPlanName(), plan.getPlanType(), plan.getRecurringFlag());
 
             if (!plan.getStatus().equalsIgnoreCase(ACTIVE)) {
                 throw new AAAException(LogMessages.ERROR_POLICY_CONFLICT, "PLAN_IS_NOT_ACTIVE", HttpStatus.UNPROCESSABLE_ENTITY);
@@ -529,7 +525,7 @@ public class ServiceProvisioningService {
                 bucketInstanceList.add(bucketInstance);
             }
 
-            log.info("Built {} bucket instances for Service Instance ID: {} (not saved to DB)",
+            log.info("Built {} bucket instances for the Service Instance ID: {} (not saved to DB)",
                     bucketInstanceList.size(), serviceInstance.getId());
 
             return bucketInstanceList;
@@ -590,8 +586,7 @@ public class ServiceProvisioningService {
         log.info("Status change to Inactive detected - triggering deletion process for Service ID: {}",
                 serviceInstance.getId());
 
-        // Store request_id in service instance
-        serviceInstance.setRequestId(requestId);  // ADD THIS
+        serviceInstance.setRequestId(requestId);
 
         List<BucketInstance> buckets = bucketInstanceRepository.findByServiceId(serviceInstance.getId());
 
@@ -599,19 +594,22 @@ public class ServiceProvisioningService {
         serviceInstance.setUpdatedAt(LocalDateTime.now());
 
         publishServiceDeletedEvents(serviceInstance, buckets);
-        coAManagementService.sendServiceStatusCoARequest(
-                serviceInstance.getUsername(), serviceInstance.getId(), "INACTIVE");
+
+        // Fire CoA async — Kafka write already committed above
+        Long capturedServiceId = serviceInstance.getId();
+        String capturedUsername = serviceInstance.getUsername();
+        CompletableFuture.runAsync(() -> sendServiceStatusCoAAsync(capturedUsername, capturedServiceId, "INACTIVE"));
 
         log.info("Service deletion events published for Service ID: {}", serviceInstance.getId());
 
-        return buildUpdateSuccessResponse(serviceInstance, userId, requestId);  // Pass request_id
+        return buildUpdateSuccessResponse(serviceInstance, userId, requestId);
     }
 
     private UpdateResponseDTO performServiceUpdate(ServiceInstance serviceInstance, UpdateRequestDTO updateDto,
                                                    String userId, String requestId) {
         serviceInstance.setRequestId(requestId);
 
-        // ✅ Capture BEFORE anything is overwritten
+        // Capture BEFORE anything is overwritten
         String oldStatus = serviceInstance.getStatus();
         log.info("Service status transition check - user='{}', currentStatus='{}'", userId, oldStatus);
 
@@ -641,9 +639,8 @@ public class ServiceProvisioningService {
         List<BucketInstance> updatedBuckets = manageMainBucketQuota(updateDto, bucketInstance);
         publishServiceUpdatedEvents(serviceInstance, updatedBuckets);
 
-        //  CoA — now oldStatus is correctly the PRE-update status
         if (updateDto.getStatus() != null) {
-            String newStatus = serviceInstance.getStatus(); // already set above, this is the new status
+            String newStatus = serviceInstance.getStatus();
             log.info("Evaluating CoA for status transition: '{}' -> '{}', user='{}', serviceId='{}'",
                     oldStatus, newStatus, userId, serviceInstance.getId());
 
@@ -654,13 +651,14 @@ public class ServiceProvisioningService {
             if (shouldSendCoA) {
                 log.info("CoA required for transition '{}' -> '{}', user='{}', serviceId='{}'",
                         oldStatus, newStatus, userId, serviceInstance.getId());
-                coAManagementService.sendServiceStatusCoARequest(
-                        serviceInstance.getUsername(),
-                        serviceInstance.getId(),
-                        newStatus.toUpperCase());
+
+                Long capturedServiceId = serviceInstance.getId();
+                String capturedUsername = serviceInstance.getUsername();
+                String capturedStatus = newStatus.toUpperCase();
+                CompletableFuture.runAsync(
+                        () -> sendServiceStatusCoAAsync(capturedUsername, capturedServiceId, capturedStatus));
             } else {
-                log.info("No CoA required for transition '{}' -> '{}', user='{}'",
-                        oldStatus, newStatus, userId);
+                log.info("No CoA required for transition '{}' -> '{}', user='{}'", oldStatus, newStatus, userId);
             }
         } else {
             log.debug("No status change in request for user='{}', skipping CoA", userId);
@@ -747,12 +745,12 @@ public class ServiceProvisioningService {
 
     private void publishServiceCreatedEvents(ServiceInstance service, List<BucketInstance> buckets) {
         try {
-            DBWriteRequestGeneric mainEvent = eventMapper.toServiceDBWriteEvent("CREATE", service);
+            DBWriteRequestGeneric mainEvent = eventMapper.toServiceDBWriteEvent(CREATED, service);
 
-            // Bundle bucket CREATEs as relatedWrites
+            // Bundle bucket CREATE as relatedWrites
             List<DBWriteRequestGeneric> bucketWrites = buckets.stream()
-                    .map(b -> eventMapper.toBucketDBWriteEvent("CREATE", b, service.getUsername()))
-                    .collect(Collectors.toList());
+                    .map(b -> eventMapper.toBucketDBWriteEvent(CREATED, b, service.getUsername()))
+                    .toList();
             mainEvent.setRelatedWrites(bucketWrites);
 
             PublishResult result = kafkaEventPublisher.publishDBWriteEvent(mainEvent);
@@ -760,7 +758,7 @@ public class ServiceProvisioningService {
             if (result.isCompleteFailure()) {
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        result.getDcError(),
+                        result.getError(),
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
@@ -782,12 +780,12 @@ public class ServiceProvisioningService {
 
     private void publishServiceUpdatedEvents(ServiceInstance service, List<BucketInstance> updatedBuckets) {
         try {
-            DBWriteRequestGeneric mainEvent = eventMapper.toServiceDBWriteEvent("UPDATE", service);
+            DBWriteRequestGeneric mainEvent = eventMapper.toServiceDBWriteEvent(UPDATE, service);
 
             if (!updatedBuckets.isEmpty()) {
                 List<DBWriteRequestGeneric> bucketWrites = updatedBuckets.stream()
-                        .map(b -> eventMapper.toBucketDBWriteEvent("UPDATE", b, service.getUsername()))
-                        .collect(Collectors.toList());
+                        .map(b -> eventMapper.toBucketDBWriteEvent(UPDATE, b, service.getUsername()))
+                        .toList();
                 mainEvent.setRelatedWrites(bucketWrites);
             }
 
@@ -796,7 +794,7 @@ public class ServiceProvisioningService {
             if (result.isCompleteFailure()) {
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        result.getDcError(),
+                        result.getError(),
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
@@ -818,12 +816,12 @@ public class ServiceProvisioningService {
 
     private void publishServiceDeletedEvents(ServiceInstance service, List<BucketInstance> buckets) {
         try {
-            DBWriteRequestGeneric mainEvent = eventMapper.toServiceDBWriteEvent("DELETE", service);
+            DBWriteRequestGeneric mainEvent = eventMapper.toServiceDBWriteEvent(DELETE, service);
 
             if (!buckets.isEmpty()) {
                 List<DBWriteRequestGeneric> bucketWrites = buckets.stream()
-                        .map(b -> eventMapper.toBucketDBWriteEvent("DELETE", b, service.getUsername()))
-                        .collect(Collectors.toList());
+                        .map(b -> eventMapper.toBucketDBWriteEvent(DELETE, b, service.getUsername()))
+                        .toList();
                 mainEvent.setRelatedWrites(bucketWrites);
             }
 
@@ -839,92 +837,6 @@ public class ServiceProvisioningService {
             );
         }
     }
-
-    private void publishBucketCreatedEvents(List<BucketInstance> buckets, String username) {
-        try {
-            for (BucketInstance bucket : buckets) {
-//
-                DBWriteRequestGeneric dbEvent = eventMapper.toBucketDBWriteEvent("CREATE", bucket, username);
-                PublishResult dbResult = kafkaEventPublisher.publishDBWriteEvent(dbEvent);
-
-                // FAIL IMMEDIATELY on first failure
-                if ( dbResult.isCompleteFailure()) {
-                    log.error("Failed to publish bucket created events for bucket ID '{}'", bucket.getId());
-                    throw new AAAException(
-                            LogMessages.ERROR_INTERNAL_ERROR,
-                            String.format("Failed to publish bucket creation event for bucket ID %d", bucket.getId()),
-                            HttpStatus.INTERNAL_SERVER_ERROR
-                    );
-                }
-
-
-                if (!dbResult.isBothSuccess()) {
-                    log.warn("Partial failure publishing DB event for bucket ID '{}'. DC: {}, DR: {}",
-                            bucket.getId(), dbResult.isDcSuccess(), dbResult.isDrSuccess());
-                }
-            }
-
-        } catch (AAAException ex) {
-            throw ex;
-        } catch (Exception e) {
-            log.error("Failed to publish bucket created events for username '{}'", username, e);
-            throw new AAAException(
-                    LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish bucket created events",
-                    HttpStatus.INTERNAL_SERVER_ERROR
-            );
-        }
-    }
-
-    private void publishBucketUpdatedEvents(List<BucketInstance> buckets, String username) {
-        try {
-            for (BucketInstance bucket : buckets) {
-
-                DBWriteRequestGeneric dbEvent = eventMapper.toBucketDBWriteEvent("UPDATE", bucket, username);
-                PublishResult dbResult = kafkaEventPublisher.publishDBWriteEvent(dbEvent);
-
-                if (dbResult.isCompleteFailure() || dbResult.isCompleteFailure()) {
-                    log.error("Failed to publish bucket update events for bucket ID '{}'", bucket.getId());
-                    throw new AAAException(
-                            LogMessages.ERROR_INTERNAL_ERROR,
-                            "Failed to publish bucket update events",
-                            HttpStatus.INTERNAL_SERVER_ERROR
-                    );
-                }
-
-                if (!dbResult.isBothSuccess()) {
-                    log.warn("Partial failure publishing bucket update event. DC: {}, DR: {}",
-                            dbResult.isDcSuccess(), dbResult.isDrSuccess());
-                }
-                if (!dbResult.isBothSuccess()) {
-                    log.warn("Partial failure publishing DB update event. DC: {}, DR: {}",
-                            dbResult.isDcSuccess(), dbResult.isDrSuccess());
-                }
-            }
-        } catch (AAAException ex) {
-            throw ex;
-        } catch (Exception e) {
-            log.error("Failed to publish bucket updated events for username '{}'", username, e);
-            throw new AAAException(
-                    LogMessages.ERROR_INTERNAL_ERROR,
-                    "Failed to publish bucket updated events",
-                    HttpStatus.INTERNAL_SERVER_ERROR
-            );
-        }
-    }
-
-    private void publishBucketDeletedEvents(List<BucketInstance> buckets, String username) {
-        try {
-            for (BucketInstance bucket : buckets) {
-                DBWriteRequestGeneric dbEvent = eventMapper.toBucketDBWriteEvent("DELETE", bucket, username);
-                kafkaEventPublisher.publishDBWriteEvent(dbEvent);
-            }
-        } catch (Exception e) {
-            log.error("Failed to publish bucket deleted events for username '{}'", username, e);
-            // Don't throw for deletes
-        }
-    }
-
     // ========== HELPER METHODS (Keep all existing validation logic) ==========
 
     private void setCycleManagementProperties(ServiceInstance serviceInstance, Plan plan, UserEntity user) {
@@ -1289,7 +1201,7 @@ public class ServiceProvisioningService {
     private static String mapStatus(Integer status) {
         return switch (status) {
             case 1 -> ACTIVE;
-            case 2 -> "Suspended";
+            case 2 -> SUSPENDED;
             case 3 -> INACTIVE;
             default -> throw new AAAException(LogMessages.ERROR_BAD_REQUEST,
                     "Invalid status: " + status, HttpStatus.BAD_REQUEST);
@@ -1329,11 +1241,41 @@ public class ServiceProvisioningService {
 
     private static Integer mapStatusToCode(String status) {
         return switch (status) {
-            case "Active" -> 1;
-            case "Suspended" -> 2;
-            case "Inactive" -> 3;
+            case ACTIVE -> 1;
+            case SUSPENDED -> 2;
+            case INACTIVE -> 3;
             default -> throw new AAAException(LogMessages.ERROR_BAD_REQUEST,
                     "Invalid status: " + status, HttpStatus.BAD_REQUEST);
         };
+    }
+    /**
+     * Sends a service status CoA request asynchronously.
+     * Best-effort: failure is logged but never blocks the response.
+     */
+    private void sendServiceStatusCoAAsync(String username, Long serviceId, String newStatus) {
+        try {
+            log.info("Sending async service status CoA for user '{}', serviceId={}, status={}",
+                    username, serviceId, newStatus);
+            coAManagementService.sendServiceStatusCoARequest(username, serviceId, newStatus);
+            log.info("Async service status CoA completed for user '{}'", username);
+        } catch (Exception e) {
+            log.warn("Async service status CoA failed for user '{}', serviceId={}, status={}: {}",
+                    username, serviceId, newStatus, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Sends a service delete CoA request asynchronously.
+     * Best-effort: failure is logged but never blocks the response.
+     */
+    private void sendServiceDeleteCoAAsync(String username, Long serviceId) {
+        try {
+            log.info("Sending async service delete CoA for user '{}', serviceId={}", username, serviceId);
+            coAManagementService.sendServiceDeleteCoARequest(username, serviceId);
+            log.info("Async service delete CoA completed for user '{}'", username);
+        } catch (Exception e) {
+            log.warn("Async service delete CoA failed for user '{}', serviceId={}: {}",
+                    username, serviceId, e.getMessage(), e);
+        }
     }
 }

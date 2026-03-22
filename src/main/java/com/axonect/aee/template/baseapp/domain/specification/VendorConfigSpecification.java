@@ -10,6 +10,10 @@ import java.util.List;
 
 public class VendorConfigSpecification {
 
+    private VendorConfigSpecification() {
+        throw new UnsupportedOperationException("Utility class cannot be instantiated");
+    }
+
     public static Specification<VendorConfig> filterVendorConfig(VendorConfigFilterRequest filter) {
         return (root, query, criteriaBuilder) -> {
             List<Predicate> predicates = new ArrayList<>();

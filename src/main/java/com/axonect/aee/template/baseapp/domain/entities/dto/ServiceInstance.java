@@ -29,7 +29,7 @@ public class ServiceInstance {
     
     @Id
     @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "service_instance_seq")
-    @SequenceGenerator(name = "service_instance_seq", sequenceName = "SERVICE_INSTANCE_SEQ", allocationSize = 50)
+    @SequenceGenerator(name = "service_instance_seq", sequenceName = "SERVICE_INSTANCE_SEQ", allocationSize = 1)
     private Long id;
     
     @Column(name = "PLAN_ID", length = 64, nullable = false)

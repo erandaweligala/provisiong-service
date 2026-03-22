@@ -21,7 +21,7 @@ public class BucketInstance {
 
     @Id
     @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "bucket_instance_seq")
-    @SequenceGenerator(name = "bucket_instance_seq", sequenceName = "BUCKET_INSTANCE_SEQ", allocationSize = 50)
+    @SequenceGenerator(name = "bucket_instance_seq", sequenceName = "BUCKET_INSTANCE_SEQ", allocationSize = 1)
     private Long id;
 
     @Column(name = "BUCKET_ID", nullable = false, length = 64)

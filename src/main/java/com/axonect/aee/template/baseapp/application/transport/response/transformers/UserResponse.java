@@ -64,14 +64,14 @@ public class UserResponse {
     @JsonProperty("status")
     private Integer status;
 
-    @JsonProperty("contact_name")
+/*    @JsonProperty("contact_name")
     private String contactName;
 
     @JsonProperty("contact_email")
     private String contactEmail;
 
     @JsonProperty("contact_number")
-    private String contactNumber;
+    private String contactNumber;*/
 
     @JsonProperty("concurrency")
     private Integer concurrency;

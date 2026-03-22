@@ -16,6 +16,7 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -183,25 +184,24 @@ public class BngController {
         );
     }
 
-    /**
-     * Ping BNG IP
-     * Returns SUCCESS or FAILED
-     */
     @PostMapping("/ping")
     public ResponseEntity<ApiResponse> pingBng(@RequestBody PingRequest request) {
-        String status = pingService.ping(request.getBngIp());
+        String status = pingService.ping(request.getBngId());
 
-        // Determine message based on status
-        String message = "SUCCESS".equals(status) ? "Ping SUCCESS" : "Ping FAILED";
+        return switch (status) {
+            case "NOT_FOUND" ->
+                    ResponseEntity.status(HttpStatus.NOT_FOUND)
+                            .body(new ApiResponse(false, "BNG not found: " + request.getBngId(), status));
 
-        // Create response with all three fields
-        ApiResponse response = new ApiResponse(
-                "SUCCESS".equals(status), // success: true if SUCCESS, false if FAILED
-                message,                  // message: "Ping SUCCESS" or "Ping FAILED"
-                status                    // data: "SUCCESS" or "FAILED"
-        );
+            case "INVALID_IP" ->
+                    ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                            .body(new ApiResponse(false, "NAS IP is invalid, a domain name, or a loopback address", status));
 
-        return ResponseEntity.ok(response);
+            default -> {
+                String message = "SUCCESS".equals(status) ? "Ping SUCCESS" : "Ping FAILED";
+                yield ResponseEntity.ok(new ApiResponse("SUCCESS".equals(status), message, status));
+            }
+        };
     }
 
 

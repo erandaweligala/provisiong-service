@@ -23,21 +23,15 @@ app:
     queue-capacity: 10000
     thread-name-prefix: "async-validation-"
 
+  jwt:
+    secret: bXlTdXBlclNlY3JldEtleUZvckpXVEF1dGhlbnRpY2F0aW9uMjAyNA==  # Base64 encoded, min 32 chars
+    expiration-ms: 3600000
+
   kafka:
-    cluster:
-      active: dc            # Primary cluster
-    publish-to-both: false   # Only DC for now
-
-    notification-topic: dc-provisioning    # ← ADD THIS LINE
-
-
     topic:
-      user-events: dc-provisioning
+      notification: dc-provisioning
       db-write: dc-provisioning
-      service-events: dc-provisioning
-      bucket-events: dc-provisioning
-      super-template-events: dc-provisioning
-      child-template-events: dc-provisioning
+
 
     publish:
       timeout-ms: 5000
@@ -107,9 +101,7 @@ spring:
         oracle.jdbc.ReadTimeout: 30000
 
   kafka:
-    bootstrap-servers:
-      dc: kafka-headless.cluster-dc.svc.cluster.local:9092
-      dr: kafka-headless.cluster-dc.svc.cluster.local:9092
+    bootstrap-servers: kafka-headless.cluster.svc.cluster.local:9092
 
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer

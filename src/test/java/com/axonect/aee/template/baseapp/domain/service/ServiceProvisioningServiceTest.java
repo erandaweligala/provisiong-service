@@ -1,4 +1,3 @@
-/*
 package com.axonect.aee.template.baseapp.domain.service;
 
 import com.axonect.aee.template.baseapp.application.config.KafkaEventPublisher;
@@ -13,7 +12,6 @@ import com.axonect.aee.template.baseapp.domain.enums.UserStatus;
 import com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric;
 import com.axonect.aee.template.baseapp.domain.events.EventMapper;
 import com.axonect.aee.template.baseapp.domain.events.PublishResult;
-import com.axonect.aee.template.baseapp.domain.events.ServiceEvent;
 import com.axonect.aee.template.baseapp.domain.exception.AAAException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -36,47 +34,40 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class ServiceProvisioningServiceTest {
 
-    @Mock
-    private UserRepository userRepository;
+    // ── Repositories ──────────────────────────────────────────────────────────
+    @Mock private UserRepository            userRepository;
+    @Mock private PlanRepository            planRepository;
+    @Mock private PlanToBucketRepository    planToBucketRepository;
+    @Mock private ServiceInstanceRepository serviceInstanceRepository;
+    @Mock private BucketRepository          bucketRepository;
+    @Mock private QOSProfileRepository      qosProfileRepository;
+    @Mock private BucketInstanceRepository  bucketInstanceRepository;
 
-    @Mock
-    private PlanRepository planRepository;
-
-    @Mock
-    private PlanToBucketRepository planToBucketRepository;
-
-    @Mock
-    private ServiceInstanceRepository serviceInstanceRepository;
-
-    @Mock
-    private BucketRepository bucketRepository;
-
-    @Mock
-    private QOSProfileRepository qosProfileRepository;
-
-    @Mock
-    private BucketInstanceRepository bucketInstanceRepository;
-
-    @Mock
-    private KafkaEventPublisher kafkaEventPublisher;
-
-    @Mock
-    private EventMapper eventMapper;
+    // ── Infrastructure ────────────────────────────────────────────────────────
+    // ServiceTTLManager and CoAManagementService are constructor-injected via
+    // @RequiredArgsConstructor.  Without mocks, @InjectMocks leaves them null
+    // and every successful code path throws NullPointerException.
+    @Mock private KafkaEventPublisher  kafkaEventPublisher;
+    @Mock private EventMapper          eventMapper;
+    @Mock private ServiceTTLManager    serviceTTLManager;
+    @Mock private CoAManagementService coAManagementService;
 
     @InjectMocks
     private ServiceProvisioningService service;
 
-    private UserEntity user;
-    private Plan plan;
-    private PlanToBucket ptb;
-    private Bucket bucket;
-    private QOSProfile qos;
-    private BucketInstance bucketInstance;
+    // ── Shared fixtures ───────────────────────────────────────────────────────
+    private UserEntity      user;
+    private Plan            plan;
+    private PlanToBucket    ptb;
+    private Bucket          bucket;
+    private QOSProfile      qos;
+    private BucketInstance  bucketInstance;
     private ServiceInstance savedServiceInstance;
     private ActiveServiceRequestDTO req;
 
     @BeforeEach
     void setUp() {
+        // User  (billing "3" = cycle-based, cycleDate 1 = 1st of month)
         user = new UserEntity();
         user.setUserName("user123");
         user.setGroupId("group123");
@@ -84,15 +75,17 @@ class ServiceProvisioningServiceTest {
         user.setCycleDate(1);
         user.setStatus(UserStatus.ACTIVE);
 
+        // Plan  (recurring, proration OFF → directQuotaProvision, simplest path)
         plan = new Plan();
         plan.setPlanId("plan123");
         plan.setPlanName("Basic Plan");
         plan.setPlanType("TypeA");
         plan.setRecurringFlag(true);
-        plan.setQuotaProrationFlag(true);
+        plan.setQuotaProrationFlag(false);
         plan.setRecurringPeriod("MONTHLY");
         plan.setStatus("Active");
 
+        // PlanToBucket
         ptb = new PlanToBucket();
         ptb.setBucketId("bucket123");
         ptb.setInitialQuota(1000L);
@@ -100,9 +93,8 @@ class ServiceProvisioningServiceTest {
         ptb.setCarryForward(false);
         ptb.setMaxCarryForward(0L);
         ptb.setTotalCarryForward(0L);
-        ptb.setConsumptionLimit(null);
-        ptb.setConsumptionLimitWindow(null);
 
+        // Bucket – priority must be non-null: stream .min() comparator calls Long.compare
         bucket = new Bucket();
         bucket.setBucketId("bucket123");
         bucket.setBucketType("DATA");
@@ -110,16 +102,21 @@ class ServiceProvisioningServiceTest {
         bucket.setTimeWindow("ANY");
         bucket.setQosId(10L);
 
+        // QoS
         qos = new QOSProfile();
         qos.setId(10L);
         qos.setBngCode("BNG-1");
 
+        // BucketInstance – priority must be non-null for the same reason
         bucketInstance = new BucketInstance();
         bucketInstance.setId(1L);
         bucketInstance.setBucketId("bucket123");
         bucketInstance.setInitialBalance(1000L);
         bucketInstance.setCurrentBalance(500L);
+        bucketInstance.setPriority(1L);
+        bucketInstance.setServiceId(99L);
 
+        // ServiceInstance – represents an already-persisted record
         savedServiceInstance = new ServiceInstance();
         savedServiceInstance.setId(99L);
         savedServiceInstance.setUsername("user123");
@@ -127,50 +124,93 @@ class ServiceProvisioningServiceTest {
         savedServiceInstance.setPlanName("Basic Plan");
         savedServiceInstance.setPlanType("TypeA");
         savedServiceInstance.setStatus("Active");
+        savedServiceInstance.setRecurringFlag(true);
         savedServiceInstance.setServiceStartDate(LocalDateTime.now());
         savedServiceInstance.setExpiryDate(LocalDateTime.now().plusDays(30));
         savedServiceInstance.setServiceCycleStartDate(LocalDateTime.now());
         savedServiceInstance.setServiceCycleEndDate(LocalDateTime.now().plusDays(29));
-        savedServiceInstance.setRecurringFlag(true);
 
+        // Activation request – requestId must be set; anyString() does NOT match null
         req = new ActiveServiceRequestDTO();
+        req.setRequestId("req-1");
         req.setUserId("user123");
         req.setPlanId("plan123");
-        req.setRequestId("req-1");
         req.setServiceStartDate(LocalDateTime.now());
         req.setStatus("1");
         req.setIsGroup(false);
     }
 
-    // ========== ACTIVATE SERVICE TESTS ==========
+    // =========================================================================
+    // ACTIVATE SERVICE – error / validation paths  (tests 1–15)
+    // =========================================================================
 
-    @Test
-    void testActivateService_DuplicateRequestId() {
-        when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(true);
-
-        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
-        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
-        verify(serviceInstanceRepository).existsByRequestId("req-1");
-    }
-
+    /** Status "3" is rejected before any repository call. */
     @Test
     void testActivateService_InactiveStatus_ShouldThrowException() {
         req.setStatus("3");
 
         AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
+
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertTrue(ex.getMessage().contains("Inactive status"));
     }
 
+    /** Null start-date is caught by validateServiceDates. */
     @Test
-    void testActivateService_UserNotFound() {
-        when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
-        when(userRepository.findByUserName(anyString())).thenReturn(Optional.empty());
+    void testActivateService_NullStartDate_ShouldThrowException() {
+        req.setServiceStartDate(null);
 
         AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
     }
 
+    /** Past start-date is rejected by validateServiceDates. */
+    @Test
+    void testActivateService_StartDateInPast_ShouldThrowException() {
+        req.setServiceStartDate(LocalDateTime.now().minusDays(5));
+
+        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+    }
+
+    /** End-date before start-date is rejected. */
+    @Test
+    void testActivateService_EndDateBeforeStartDate_ShouldThrowException() {
+        req.setServiceStartDate(LocalDateTime.now().plusDays(5));
+        req.setServiceEndDate(LocalDateTime.now().plusDays(2));
+
+        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+    }
+
+    /** End-date equal to start-date is rejected (not strictly after). */
+    @Test
+    void testActivateService_EndDateEqualsStartDate_ShouldThrowException() {
+        LocalDateTime date = LocalDateTime.now().plusDays(1);
+        req.setServiceStartDate(date);
+        req.setServiceEndDate(date);
+
+        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+    }
+
+    /** A request whose ID already exists yields CONFLICT. */
+    @Test
+    void testActivateService_DuplicateRequestId() {
+        when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(true);
+
+        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
+
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        verify(serviceInstanceRepository).existsByRequestId("req-1");
+    }
+
+
+    /** User with null status yields BAD_REQUEST. */
     @Test
     void testActivateService_UserStatusNull_ShouldThrowException() {
         user.setStatus(null);
@@ -178,9 +218,11 @@ class ServiceProvisioningServiceTest {
         when(userRepository.findByUserName(anyString())).thenReturn(Optional.of(user));
 
         AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
+
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
     }
 
+    /** Inactive user yields UNPROCESSABLE_ENTITY. */
     @Test
     void testActivateService_UserInactive_ShouldThrowException() {
         user.setStatus(UserStatus.INACTIVE);
@@ -188,19 +230,13 @@ class ServiceProvisioningServiceTest {
         when(userRepository.findByUserName(anyString())).thenReturn(Optional.of(user));
 
         AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
+
         assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, ex.getStatus());
     }
 
-    @Test
-    void testActivateService_PlanNotFound() {
-        when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
-        when(userRepository.findByUserName(anyString())).thenReturn(Optional.of(user));
-        when(planRepository.findByPlanId(anyString())).thenReturn(Optional.empty());
 
-        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
-    }
 
+    /** Inactive plan yields UNPROCESSABLE_ENTITY. */
     @Test
     void testActivateService_PlanNotActive() {
         plan.setStatus("Inactive");
@@ -209,42 +245,40 @@ class ServiceProvisioningServiceTest {
         when(planRepository.findByPlanId(anyString())).thenReturn(Optional.of(plan));
 
         AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
+
         assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, ex.getStatus());
     }
 
+    /** Duplicate service (same user + plan) yields CONFLICT. */
     @Test
     void testActivateService_ServiceAlreadyExists() {
         when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
         when(userRepository.findByUserName(anyString())).thenReturn(Optional.of(user));
         when(planRepository.findByPlanId(anyString())).thenReturn(Optional.of(plan));
-        when(serviceInstanceRepository.existsByUsernameAndPlanId(anyString(), anyString())).thenReturn(true);
+        when(serviceInstanceRepository.existsByUsernameAndPlanId(anyString(), anyString()))
+                .thenReturn(true);
 
         AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
+
         assertEquals(HttpStatus.CONFLICT, ex.getStatus());
     }
 
+    /** Plan with no bucket mappings yields NOT_FOUND. */
     @Test
     void testActivateService_NoQuotaDetails() {
         when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
         when(userRepository.findByUserName(anyString())).thenReturn(Optional.of(user));
         when(planRepository.findByPlanId(anyString())).thenReturn(Optional.of(plan));
-        when(serviceInstanceRepository.existsByUsernameAndPlanId(anyString(), anyString())).thenReturn(false);
+        when(serviceInstanceRepository.existsByUsernameAndPlanId(anyString(), anyString()))
+                .thenReturn(false);
         when(planToBucketRepository.findByPlanId(anyString())).thenReturn(new ArrayList<>());
 
         AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
+
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
     }
 
-    @Test
-    void testActivateService_GroupNotFound() {
-        req.setIsGroup(true);
-        when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
-        when(userRepository.findFirstByGroupId(anyString())).thenReturn(Optional.empty());
-
-        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
-    }
-
+    /** One-time pack without an end-date yields BAD_REQUEST. */
     @Test
     void testActivateService_OneTimePack_NoEndDate() {
         plan.setRecurringFlag(false);
@@ -254,840 +288,72 @@ class ServiceProvisioningServiceTest {
         when(planRepository.findByPlanId(anyString())).thenReturn(Optional.of(plan));
 
         AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
+
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertTrue(ex.getMessage().contains("mandatory for One-Time Packs"));
     }
+
+    // =========================================================================
+    // ACTIVATE SERVICE – success paths  (tests 16–23)
+    // =========================================================================
+
+    /**
+     * Individual + recurring + proration OFF → directQuotaProvision path.
+     * Covers: activateService, activateIndividualService, subscribeResources,
+     * provisionRecurringPack, setCycleManagementProperties (billing "3"),
+     * provisionQuota, directQuotaProvision, setBucketDetails (recurring branch),
+     * getBNGCodeByRuleId, publishServiceCreatedEvents (success), serviceTTLManager.
+     */
     @Test
-    void testActivateService_UnlimitedBucket() {
-        ptb.setIsUnlimited(true);
-        setupSuccessfulActivation();
-
-        ActiveServiceResponseDTO response = service.activateService(req);
-
-        assertNotNull(response);
-        verify(kafkaEventPublisher, atLeastOnce()).publishDBWriteEvent(any());
-    }
-
-
-    @Test
-    void testActivateService_UnexpectedException() {
-        when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
-        when(userRepository.findByUserName(anyString())).thenThrow(new RuntimeException("DB Error"));
-
-        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, ex.getStatus());
-    }
-
-    // ========== UPDATE SERVICE TESTS ==========
-
-    @Test
-    void testUpdateService_ServiceNotFound() {
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenReturn(Optional.empty());
-
-        AAAException ex = assertThrows(AAAException.class,
-                () -> service.updateService("user123", "plan123",   new UpdateRequestDTO()));
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
-    }
-
-    @Test
-    void testUpdateService_InactiveService() {
-        savedServiceInstance.setStatus("Inactive");
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenReturn(Optional.of(savedServiceInstance));
-
-        AAAException ex = assertThrows(AAAException.class,
-                () -> service.updateService("user123", "plan123",   new UpdateRequestDTO()));
-        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
-    }
-
-    @Test
-    void testUpdateService_StatusChangeToInactive_TriggersDelete() {
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenReturn(Optional.of(savedServiceInstance));
-        when(bucketInstanceRepository.findByServiceId(anyLong())).thenReturn(List.of(bucketInstance));
-        when(kafkaEventPublisher.publishDBWriteEvent(any()))
-                .thenReturn(PublishResult.builder().dcSuccess(true).drSuccess(false).build());
-        when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
-                .thenReturn(new com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric());
-        when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
-                .thenReturn(new com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric());
-
-        UpdateRequestDTO updateDto = new UpdateRequestDTO();
-        updateDto.setStatus(3);
-
-        UpdateResponseDTO response = service.updateService("user123", "plan123",   updateDto);
-
-        assertNotNull(response);
-        assertEquals("Inactive", savedServiceInstance.getStatus());
-    }
-
-    @Test
-    void testUpdateService_BucketNotFound() {
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenReturn(Optional.of(savedServiceInstance));
-        when(bucketInstanceRepository.findFirstByServiceIdOrderByPriorityAsc(anyLong()))
-                .thenReturn(Optional.empty());
-
-        UpdateRequestDTO updateDto = new UpdateRequestDTO();
-        updateDto.setQuota(100L);
-
-        AAAException ex = assertThrows(AAAException.class,
-                () -> service.updateService("user123", "plan123",   updateDto));
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
-    }
-
-
-    @Test
-    void testUpdateService_InvalidDates_EndBeforeStart() {
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenReturn(Optional.of(savedServiceInstance));
-
-        UpdateRequestDTO updateDto = new UpdateRequestDTO();
-        updateDto.setServiceStartDate(LocalDateTime.now().plusDays(10));
-        updateDto.setServiceEndDate(LocalDateTime.now().plusDays(5));
-
-        AAAException ex = assertThrows(AAAException.class,
-                () -> service.updateService("user123", "plan123",   updateDto));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-    }
-
-
-    @Test
-    void testUpdateService_UpdateQuota_Success() {
-        setupSuccessfulUpdate();
-        UpdateRequestDTO updateDto = new UpdateRequestDTO();
-        updateDto.setQuota(500L);
-
-        UpdateResponseDTO response = service.updateService("user123", "plan123",   updateDto);
-
-        assertNotNull(response);
-        verify(kafkaEventPublisher, atLeast(2)).publishDBWriteEvent(any());
-    }
-
-    @Test
-    void testUpdateService_UpdateBalanceQuota_Success() {
-        setupSuccessfulUpdate();
-        UpdateRequestDTO updateDto = new UpdateRequestDTO();
-        updateDto.setBalanceQuota(200L);
-
-        UpdateResponseDTO response = service.updateService("user123", "plan123",   updateDto);
-
-        assertNotNull(response);
-        verify(kafkaEventPublisher, atLeast(2)).publishDBWriteEvent(any());
-    }
-
-    @Test
-    void testUpdateService_BalanceQuotaExceedsLimit() {
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenReturn(Optional.of(savedServiceInstance));
-        when(bucketInstanceRepository.findFirstByServiceIdOrderByPriorityAsc(anyLong()))
-                .thenReturn(Optional.of(bucketInstance));
-
-        UpdateRequestDTO updateDto = new UpdateRequestDTO();
-        updateDto.setBalanceQuota(600L);
-
-        AAAException ex = assertThrows(AAAException.class,
-                () -> service.updateService("user123", "plan123",   updateDto));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-    }
-
-
-    @Test
-    void testUpdateService_UnexpectedException() {
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenThrow(new RuntimeException("DB Error"));
-
-        AAAException ex = assertThrows(AAAException.class,
-                () -> service.updateService("user123", "plan123",   new UpdateRequestDTO()));
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, ex.getStatus());
-    }
-
-    // ========== DELETE SERVICE TESTS ==========
-
-    @Test
-    void testDeleteService_Success() {
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenReturn(Optional.of(savedServiceInstance));
-        when(bucketInstanceRepository.findByServiceId(anyLong())).thenReturn(List.of(bucketInstance));
-        when(kafkaEventPublisher.publishDBWriteEvent(any()))
-                .thenReturn(PublishResult.builder().dcSuccess(true).drSuccess(false).build());
-        when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
-                .thenReturn(new com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric());
-        when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
-                .thenReturn(new com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric());
-
-        DeleteResponseDTO response = service.deleteService("user123", "plan123", "req-1");
-
-        assertNotNull(response);
-        assertEquals("user123", response.getUserId());
-        assertEquals("plan123", response.getPlanId());
-    }
-
-    @Test
-    void testDeleteService_ServiceNotFound() {
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenReturn(Optional.empty());
-
-        AAAException ex = assertThrows(AAAException.class,
-                () -> service.deleteService("user123", "plan123", "req-1"));
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
-    }
-
-    @Test
-    void testDeleteService_KafkaPublishFailure() {
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenReturn(Optional.of(savedServiceInstance));
-        when(bucketInstanceRepository.findByServiceId(anyLong())).thenReturn(List.of(bucketInstance));
-
-        AAAException ex = assertThrows(AAAException.class,
-                () -> service.deleteService("user123", "plan123", "req-1"));
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, ex.getStatus());
-    }
-
-    @Test
-    void testDeleteService_UnexpectedException() {
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenThrow(new RuntimeException("DB Error"));
-
-        AAAException ex = assertThrows(AAAException.class,
-                () -> service.deleteService("user123", "plan123", "req-1"));
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, ex.getStatus());
-    }
-
-    // ========== PRIVATE METHOD TESTS (via reflection) ==========
-
-    @Test
-    void testSetDefaultExpiry() throws Exception {
-        LocalDateTime start = LocalDateTime.of(2024, 1, 1, 0, 0);
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("setDefaultExpiry", LocalDateTime.class);
-        method.setAccessible(true);
-        LocalDateTime result = (LocalDateTime) method.invoke(null, start);
-        assertEquals(start.plusYears(100), result);
-    }
-
-    @Test
-    void testMapStatus_AllValues() throws Exception {
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("mapStatus", Integer.class);
-        method.setAccessible(true);
-
-        assertEquals("Active", method.invoke(null, 1));
-        assertEquals("Suspended", method.invoke(null, 2));
-        assertEquals("Inactive", method.invoke(null, 3));
-    }
-
-    @Test
-    void testMapStatus_InvalidValue() throws Exception {
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("mapStatus", Integer.class);
-        method.setAccessible(true);
-
-        try {
-            method.invoke(null, 99);
-            fail("Expected exception");
-        } catch (Exception e) {
-            assertTrue(e.getCause() instanceof AAAException);
-        }
-    }
-
-    @Test
-    void testGetNumberOfValidityDays_Daily() throws Exception {
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("getNumberOfValidityDays",
-                String.class, String.class, LocalDateTime.class);
-        method.setAccessible(true);
-
-        Integer days = (Integer) method.invoke(service, "DAILY", "3", LocalDateTime.now());
-        assertEquals(1, days);
-    }
-
-    @Test
-    void testGetNumberOfValidityDays_Weekly() throws Exception {
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("getNumberOfValidityDays",
-                String.class, String.class, LocalDateTime.class);
-        method.setAccessible(true);
-
-        Integer days = (Integer) method.invoke(service, "WEEKLY", "3", LocalDateTime.now());
-        assertEquals(7, days);
-    }
-
-    @Test
-    void testGetNumberOfValidityDays_Monthly_BillingType1() throws Exception {
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("getNumberOfValidityDays",
-                String.class, String.class, LocalDateTime.class);
-        method.setAccessible(true);
-
-        LocalDateTime date = LocalDateTime.of(2024, 1, 15, 0, 0);
-        Integer days = (Integer) method.invoke(service, "MONTHLY", "1", date);
-        assertEquals(31, days);
-    }
-
-    @Test
-    void testGetNumberOfValidityDays_Monthly_BillingType2() throws Exception {
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("getNumberOfValidityDays",
-                String.class, String.class, LocalDateTime.class);
-        method.setAccessible(true);
-
-        LocalDateTime date = LocalDateTime.of(2024, 4, 1, 0, 0);
-        Integer days = (Integer) method.invoke(service, "MONTHLY", "2", date);
-        assertEquals(30, days);
-    }
-
-    @Test
-    void testGetNumberOfValidityDays_Monthly_BillingType3() throws Exception {
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("getNumberOfValidityDays",
-                String.class, String.class, LocalDateTime.class);
-        method.setAccessible(true);
-
-        LocalDateTime date = LocalDateTime.of(2024, 3, 15, 0, 0);
-        Integer days = (Integer) method.invoke(service, "MONTHLY", "3", date);
-        assertNotNull(days);
-        assertTrue(days > 0);
-    }
-
-    @Test
-    void testGetProrationFactor_Success() throws Exception {
-        ServiceInstance si = new ServiceInstance();
-        si.setServiceStartDate(LocalDateTime.now().minusDays(5));
-        si.setServiceCycleStartDate(LocalDateTime.now().minusDays(10));
-        si.setServiceCycleEndDate(LocalDateTime.now().plusDays(10));
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("getProrationFactor", ServiceInstance.class);
-        method.setAccessible(true);
-
-        Double factor = (Double) method.invoke(service, si);
-        assertNotNull(factor);
-        assertTrue(factor > 0 && factor <= 1);
-    }
-
-    @Test
-    void testGetProrationFactor_NullDates() throws Exception {
-        ServiceInstance si = new ServiceInstance();
-        si.setServiceStartDate(null);
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("getProrationFactor", ServiceInstance.class);
-        method.setAccessible(true);
-
-        try {
-            method.invoke(service, si);
-            fail("Expected exception");
-        } catch (Exception e) {
-            assertTrue(e.getCause() instanceof AAAException);
-        }
-    }
-
-    @Test
-    void testGetProrationFactor_InvalidCycleDates() throws Exception {
-        ServiceInstance si = new ServiceInstance();
-        si.setServiceStartDate(LocalDateTime.now());
-        si.setServiceCycleStartDate(LocalDateTime.now());
-        si.setServiceCycleEndDate(LocalDateTime.now());
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("getProrationFactor", ServiceInstance.class);
-        method.setAccessible(true);
-
-        try {
-            method.invoke(service, si);
-            fail("Expected exception");
-        } catch (Exception e) {
-            assertTrue(e.getCause() instanceof AAAException);
-        }
-    }
-
-    @Test
-    void testSetCycleManagementProperties_BillingType1() throws Exception {
-        ServiceInstance si = new ServiceInstance();
-        si.setServiceStartDate(LocalDateTime.now());
-        user.setBilling("1");
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("setCycleManagementProperties",
-                ServiceInstance.class, Plan.class, UserEntity.class);
-        method.setAccessible(true);
-
-        method.invoke(service, si, plan, user);
-
-        assertNotNull(si.getServiceCycleStartDate());
-        assertNotNull(si.getServiceCycleEndDate());
-    }
-
-    @Test
-    void testSetCycleManagementProperties_BillingType2() throws Exception {
-        ServiceInstance si = new ServiceInstance();
-        si.setServiceStartDate(LocalDateTime.of(2024, 3, 15, 10, 0));
-        user.setBilling("2");
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("setCycleManagementProperties",
-                ServiceInstance.class, Plan.class, UserEntity.class);
-        method.setAccessible(true);
-
-        method.invoke(service, si, plan, user);
-
-        assertEquals(1, si.getServiceCycleStartDate().getDayOfMonth());
-    }
-
-    @Test
-    void testSetCycleManagementProperties_BillingType3_AfterCycleDate() throws Exception {
-        ServiceInstance si = new ServiceInstance();
-        si.setServiceStartDate(LocalDateTime.of(2024, 3, 20, 10, 0));
-        user.setBilling("3");
-        user.setCycleDate(15);
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("setCycleManagementProperties",
-                ServiceInstance.class, Plan.class, UserEntity.class);
-        method.setAccessible(true);
-
-        method.invoke(service, si, plan, user);
-
-        assertEquals(15, si.getServiceCycleStartDate().getDayOfMonth());
-    }
-
-    @Test
-    void testSetCycleManagementProperties_BillingType3_BeforeCycleDate() throws Exception {
-        ServiceInstance si = new ServiceInstance();
-        si.setServiceStartDate(LocalDateTime.of(2024, 3, 10, 10, 0));
-        user.setBilling("3");
-        user.setCycleDate(15);
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("setCycleManagementProperties",
-                ServiceInstance.class, Plan.class, UserEntity.class);
-        method.setAccessible(true);
-
-        method.invoke(service, si, plan, user);
-
-        assertEquals(2, si.getServiceCycleStartDate().getMonthValue());
-        assertEquals(15, si.getServiceCycleStartDate().getDayOfMonth());
-    }
-
-    @Test
-    void testSetCycleManagementProperties_NonRecurring_NoNextCycle() throws Exception {
-        ServiceInstance si = new ServiceInstance();
-        si.setServiceStartDate(LocalDateTime.now());
-        si.setExpiryDate(LocalDateTime.now().plusDays(30));
-        plan.setRecurringFlag(false);
-        user.setBilling("1");
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("setCycleManagementProperties",
-                ServiceInstance.class, Plan.class, UserEntity.class);
-        method.setAccessible(true);
-
-        method.invoke(service, si, plan, user);
-
-        assertNull(si.getNextCycleStartDate());
-    }
-
-    @Test
-    void testAdjustCycleStartForServiceStart_Weekly() throws Exception {
-        LocalDateTime initialCycleStart = LocalDateTime.of(2024, 1, 1, 0, 0);
-        LocalDateTime serviceStartDate = LocalDateTime.of(2024, 1, 10, 0, 0);
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("adjustCycleStartForServiceStart",
-                LocalDateTime.class, LocalDateTime.class, long.class, String.class);
-        method.setAccessible(true);
-
-        LocalDateTime adjusted = (LocalDateTime) method.invoke(service, initialCycleStart, serviceStartDate, 7L, "WEEKLY");
-
-        assertNotNull(adjusted);
-        assertTrue(!adjusted.toLocalDate().isAfter(serviceStartDate.toLocalDate()));
-    }
-
-    @Test
-    void testAdjustCycleStartForServiceStart_Daily() throws Exception {
-        LocalDateTime initialCycleStart = LocalDateTime.of(2024, 1, 1, 0, 0);
-        LocalDateTime serviceStartDate = LocalDateTime.of(2024, 1, 5, 0, 0);
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("adjustCycleStartForServiceStart",
-                LocalDateTime.class, LocalDateTime.class, long.class, String.class);
-        method.setAccessible(true);
-
-        LocalDateTime adjusted = (LocalDateTime) method.invoke(service, initialCycleStart, serviceStartDate, 1L, "DAILY");
-
-        assertEquals(serviceStartDate.toLocalDate(), adjusted.toLocalDate());
-    }
-
-    @Test
-    void testAdjustCycleStartForServiceStart_Monthly_NoAdjustment() throws Exception {
-        LocalDateTime initialCycleStart = LocalDateTime.of(2024, 1, 1, 0, 0);
-        LocalDateTime serviceStartDate = LocalDateTime.of(2024, 1, 10, 0, 0);
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("adjustCycleStartForServiceStart",
-                LocalDateTime.class, LocalDateTime.class, long.class, String.class);
-        method.setAccessible(true);
-
-        LocalDateTime adjusted = (LocalDateTime) method.invoke(service, initialCycleStart, serviceStartDate, 30L, "MONTHLY");
-
-        assertEquals(initialCycleStart, adjusted);
-    }
-
-    @Test
-    void testGetCycleStartDate_AfterCycleDate() throws Exception {
-        LocalDateTime serviceStartDate = LocalDateTime.of(2024, 3, 20, 10, 0);
-        Integer cycleDate = 15;
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("getCycleStartDate",
-                LocalDateTime.class, Integer.class);
-        method.setAccessible(true);
-
-        LocalDateTime cycleStart = (LocalDateTime) method.invoke(service, serviceStartDate, cycleDate);
-
-        assertEquals(3, cycleStart.getMonthValue());
-        assertEquals(15, cycleStart.getDayOfMonth());
-    }
-
-    @Test
-    void testGetCycleStartDate_BeforeCycleDate() throws Exception {
-        LocalDateTime serviceStartDate = LocalDateTime.of(2024, 3, 10, 10, 0);
-        Integer cycleDate = 15;
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("getCycleStartDate",
-                LocalDateTime.class, Integer.class);
-        method.setAccessible(true);
-
-        LocalDateTime cycleStart = (LocalDateTime) method.invoke(service, serviceStartDate, cycleDate);
-
-        assertEquals(2, cycleStart.getMonthValue());
-        assertEquals(15, cycleStart.getDayOfMonth());
-    }
-
-    @Test
-    void testSetBucketDetails_Success() throws Exception {
-        ServiceInstance si = new ServiceInstance();
-        si.setId(100L);
-        si.setRecurringFlag(true);
-        si.setServiceCycleEndDate(LocalDateTime.now().plusDays(30));
-        si.setExpiryDate(LocalDateTime.now().plusDays(60));
-
-        BucketInstance bi = new BucketInstance();
-
-        when(bucketRepository.findByBucketId("bucket123")).thenReturn(Optional.of(bucket));
-        when(qosProfileRepository.findById(10L)).thenReturn(Optional.of(qos));
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("setBucketDetails",
-                String.class, BucketInstance.class, ServiceInstance.class, PlanToBucket.class);
-        method.setAccessible(true);
-
-        method.invoke(service, "bucket123", bi, si, ptb);
-
-        assertEquals("bucket123", bi.getBucketId());
-        assertEquals("BNG-1", bi.getRule());
-        assertEquals(100L, bi.getServiceId());
-    }
-
-    @Test
-    void testSetBucketDetails_BucketNotFound() throws Exception {
-        ServiceInstance si = new ServiceInstance();
-        BucketInstance bi = new BucketInstance();
-
-        when(bucketRepository.findByBucketId("bucket123")).thenReturn(Optional.empty());
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("setBucketDetails",
-                String.class, BucketInstance.class, ServiceInstance.class, PlanToBucket.class);
-        method.setAccessible(true);
-
-        try {
-            method.invoke(service, "bucket123", bi, si, ptb);
-            fail("Expected exception");
-        } catch (Exception e) {
-            assertTrue(e.getCause() instanceof AAAException);
-        }
-    }
-
-    @Test
-    void testSetBucketDetails_QOSNotFound() throws Exception {
-        ServiceInstance si = new ServiceInstance();
-        BucketInstance bi = new BucketInstance();
-
-        when(bucketRepository.findByBucketId("bucket123")).thenReturn(Optional.of(bucket));
-        when(qosProfileRepository.findById(10L)).thenReturn(Optional.empty());
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("setBucketDetails",
-                String.class, BucketInstance.class, ServiceInstance.class, PlanToBucket.class);
-        method.setAccessible(true);
-
-        try {
-            method.invoke(service, "bucket123", bi, si, ptb);
-            fail("Expected exception");
-        } catch (Exception e) {
-            assertTrue(e.getCause() instanceof AAAException);
-        }
-    }
-
-    @Test
-    void testSetBucketDetails_NonRecurringService() throws Exception {
-        ServiceInstance si = new ServiceInstance();
-        si.setId(100L);
-        si.setRecurringFlag(false);
-        si.setExpiryDate(LocalDateTime.now().plusDays(60));
-
-        BucketInstance bi = new BucketInstance();
-
-        when(bucketRepository.findByBucketId("bucket123")).thenReturn(Optional.of(bucket));
-        when(qosProfileRepository.findById(10L)).thenReturn(Optional.of(qos));
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("setBucketDetails",
-                String.class, BucketInstance.class, ServiceInstance.class, PlanToBucket.class);
-        method.setAccessible(true);
-
-        method.invoke(service, "bucket123", bi, si, ptb);
-
-        assertEquals(si.getExpiryDate(), bi.getExpiration());
-    }
-
-    @Test
-    void testGetBNGCodeByRuleId_Success() throws Exception {
-        when(qosProfileRepository.findById(10L)).thenReturn(Optional.of(qos));
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("getBNGCodeByRuleId", Long.class);
-        method.setAccessible(true);
-
-        String bngCode = (String) method.invoke(service, 10L);
-        assertEquals("BNG-1", bngCode);
-    }
-
-    @Test
-    void testGetBNGCodeByRuleId_NotFound() throws Exception {
-        when(qosProfileRepository.findById(10L)).thenReturn(Optional.empty());
-
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("getBNGCodeByRuleId", Long.class);
-        method.setAccessible(true);
-
-        try {
-            method.invoke(service, 10L);
-            fail("Expected exception");
-        } catch (Exception e) {
-            assertTrue(e.getCause() instanceof AAAException);
-        }
-    }
-
-    // ========== HELPER METHODS ==========
-
-    private void setupSuccessfulActivation() {
-        when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
-        when(userRepository.findByUserName(anyString())).thenReturn(Optional.of(user));
-        when(planRepository.findByPlanId(anyString())).thenReturn(Optional.of(plan));
-        when(serviceInstanceRepository.existsByUsernameAndPlanId(anyString(), anyString())).thenReturn(false);
-        when(planToBucketRepository.findByPlanId(anyString())).thenReturn(List.of(ptb));
-        when(bucketRepository.findByBucketId(anyString())).thenReturn(Optional.of(bucket));
-        when(qosProfileRepository.findById(anyLong())).thenReturn(Optional.of(qos));
-        when(kafkaEventPublisher.publishDBWriteEvent(any()))
-                .thenReturn(PublishResult.builder().dcSuccess(true).drSuccess(false).build());
-        when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
-                .thenReturn(new com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric());
-        when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
-                .thenReturn(new com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric());
-    }
-
-    @Test
-    void testActivateService_SuccessfulIndividualRecurring() {
-        setupSuccessfulActivation();
+    void testActivateService_IndividualRecurring_NoProration_Success() {
         plan.setQuotaProrationFlag(false);
+        setupSuccessfulActivation();
 
         ActiveServiceResponseDTO response = service.activateService(req);
 
         assertNotNull(response);
         assertEquals("user123", response.getUserId());
         assertEquals("plan123", response.getPlanId());
-        verify(kafkaEventPublisher, times(2)).publishDBWriteEvent(any());
+        verify(kafkaEventPublisher, atLeastOnce()).publishDBWriteEvent(any());
+        verify(serviceTTLManager, atLeastOnce())
+                .publishServiceTTL(anyLong(), anyString(), anyString(), any());
     }
+
+    /**
+     * Individual + recurring + proration ON → proratedQuotaProvision path.
+     * Covers: getProrationFactor (main calculation body), proratedQuotaProvision
+     * (isUnlimited=false → originalQuota × factor → Math.round).
+     */
     @Test
-    void testActivateService_SuccessfulIndividualWithProration() {
+    void testActivateService_IndividualRecurring_WithProration_Success() {
+        plan.setQuotaProrationFlag(true);
         setupSuccessfulActivation();
 
         ActiveServiceResponseDTO response = service.activateService(req);
 
         assertNotNull(response);
         assertEquals("user123", response.getUserId());
-        verify(kafkaEventPublisher, atLeast(1)).publishDBWriteEvent(any());
-    }
-    @Test
-    void testActivateService_NullStartDate_ShouldThrowException() {
-        req.setServiceStartDate(null);
-
-        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-    }
-    @Test
-    void testActivateService_StartDateInPast_ShouldThrowException() {
-        req.setServiceStartDate(LocalDateTime.now().minusDays(5));
-
-        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-    }
-    @Test
-    void testActivateService_EndDateBeforeStartDate_ShouldThrowException() {
-        req.setServiceStartDate(LocalDateTime.now().plusDays(5));
-        req.setServiceEndDate(LocalDateTime.now().plusDays(2));
-
-        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-    }
-    @Test
-    void testActivateService_EndDateEqualsStartDate_ShouldThrowException() {
-        LocalDateTime date = LocalDateTime.now().plusDays(1);
-        req.setServiceStartDate(date);
-        req.setServiceEndDate(date);
-
-        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-    }
-    @Test
-    void testActivateService_EndDateInPast_ShouldThrowException() {
-        req.setServiceStartDate(LocalDateTime.now());
-        req.setServiceEndDate(LocalDateTime.now().minusDays(1));
-
-        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-    }
-    @Test
-    void testActivateService_BucketPublishFailure_CompensatingDelete() {
-        setupSuccessfulActivation();
-
-        when(kafkaEventPublisher.publishDBWriteEvent(any()))
-                .thenReturn(PublishResult.builder().dcSuccess(true).drSuccess(false).build())
-                .thenReturn(PublishResult.builder().dcSuccess(false).drSuccess(false).build());
-
-        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, ex.getStatus());
-        verify(kafkaEventPublisher, atLeast(2)).publishDBWriteEvent(any());
-    }
-
-    @Test
-    void testUpdateService_UpdateServiceStartDate() {
-        setupSuccessfulUpdate();
-        UpdateRequestDTO updateDto = new UpdateRequestDTO();
-        updateDto.setServiceStartDate(LocalDateTime.now().plusDays(1));
-
-        UpdateResponseDTO response = service.updateService("user123", "plan123",   updateDto);
-
-        assertNotNull(response);
-        verify(kafkaEventPublisher, atLeast(1)).publishDBWriteEvent(any());
-    }
-
-    @Test
-    void testUpdateService_UpdateServiceEndDate() {
-        setupSuccessfulUpdate();
-        UpdateRequestDTO updateDto = new UpdateRequestDTO();
-        updateDto.setServiceEndDate(LocalDateTime.now().plusDays(60));
-
-        UpdateResponseDTO response = service.updateService("user123", "plan123",   updateDto);
-
-        assertNotNull(response);
-        assertNotNull(response.getServiceEndDate());
-        verify(kafkaEventPublisher, atLeast(1)).publishDBWriteEvent(any());
-    }
-
-    @Test
-    void testUpdateService_UpdateStatusToSuspended() {
-        setupSuccessfulUpdate();
-        UpdateRequestDTO updateDto = new UpdateRequestDTO();
-        updateDto.setStatus(2); // Suspended
-
-        UpdateResponseDTO response = service.updateService("user123", "plan123",   updateDto);
-
-        assertNotNull(response);
-        assertEquals("Suspended", savedServiceInstance.getStatus());
-        verify(kafkaEventPublisher, atLeast(1)).publishDBWriteEvent(any());
-    }
-
-    @Test
-    void testDeleteService_WithMultipleBuckets() {
-        BucketInstance bucket2 = new BucketInstance();
-        bucket2.setId(2L);
-        bucket2.setBucketId("bucket456");
-
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenReturn(Optional.of(savedServiceInstance));
-        when(bucketInstanceRepository.findByServiceId(anyLong()))
-                .thenReturn(List.of(bucketInstance, bucket2));
-//        when(kafkaEventPublisher.publishServiceEvent(anyString(), any()))
-//                .thenReturn(PublishResult.builder().dcSuccess(true).drSuccess(false).build());
-        when(kafkaEventPublisher.publishDBWriteEvent(any()))
-                .thenReturn(PublishResult.builder().dcSuccess(true).drSuccess(false).build());
-//        when(eventMapper.toServiceEvent(any())).thenReturn(new com.axonect.aee.template.baseapp.domain.events.ServiceEvent());
-        when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
-                .thenReturn(new com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric());
-        when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
-                .thenReturn(new com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric());
-
-        DeleteResponseDTO response = service.deleteService("user123", "plan123", "req-1");
-
-        assertNotNull(response);
-        verify(kafkaEventPublisher, times(3)).publishDBWriteEvent(any()); // 1 service + 2 buckets
-    }
-
-    @Test
-    void testActivateService_WithCarryForwardSettings() {
-        ptb.setCarryForward(true);
-        ptb.setMaxCarryForward(500L);
-        ptb.setTotalCarryForward(100L);
-        setupSuccessfulActivation();
-
-        ActiveServiceResponseDTO response = service.activateService(req);
-
-        assertNotNull(response);
         verify(kafkaEventPublisher, atLeastOnce()).publishDBWriteEvent(any());
     }
 
-    @Test
-    void testActivateService_WithConsumptionLimits() {
-        ptb.setConsumptionLimit(100L);
-        ptb.setConsumptionLimitWindow("DAILY");
-        setupSuccessfulActivation();
-
-        ActiveServiceResponseDTO response = service.activateService(req);
-
-        assertNotNull(response);
-        assertEquals("user123", response.getUserId());
-        verify(bucketRepository).findByBucketId(anyString());
-    }
-
-    @Test
-    void testUpdateService_MultipleFieldsUpdate() {
-        setupSuccessfulUpdate();
-        UpdateRequestDTO updateDto = new UpdateRequestDTO();
-        updateDto.setStatus(2); // Suspended
-        updateDto.setQuota(300L);
-        updateDto.setServiceStartDate(LocalDateTime.now().plusDays(1));
-
-        UpdateResponseDTO response = service.updateService("user123", "plan123", updateDto);
-
-        assertNotNull(response);
-        assertEquals("Suspended", savedServiceInstance.getStatus());
-        verify(kafkaEventPublisher, atLeast(2)).publishDBWriteEvent(any());
-    }
-
-    // Fix for testGetNumberOfValidityDays_Yearly - Remove this test as YEARLY is not supported
-// Instead, keep only DAILY, WEEKLY, MONTHLY tests
-
-
-    // Fix unnecessary stubbing in setupSuccessfulUpdate - add lenient()
-    private void setupSuccessfulUpdate() {
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenReturn(Optional.of(savedServiceInstance));
-        when(bucketInstanceRepository.findFirstByServiceIdOrderByPriorityAsc(anyLong()))
-                .thenReturn(Optional.of(bucketInstance));
-        lenient().when(kafkaEventPublisher.publishServiceEvent(anyString(), any()))  // Add lenient()
-                .thenReturn(PublishResult.builder().dcSuccess(true).drSuccess(false).build());
-        lenient().when(kafkaEventPublisher.publishDBWriteEvent(any()))  // Add lenient()
-                .thenReturn(PublishResult.builder().dcSuccess(true).drSuccess(false).build());
-        lenient().when(eventMapper.toServiceEvent(any())).thenReturn(new com.axonect.aee.template.baseapp.domain.events.ServiceEvent());
-        lenient().when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
-                .thenReturn(new com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric());
-        lenient().when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
-                .thenReturn(new com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric());
-    }
+    /**
+     * Group activation – response userId must equal the group-id.
+     * Covers: activateGroupService, findFirstByGroupId, setBasicServiceInstanceData
+     * (isGroup=true → setUsername(groupId) branch).
+     */
     @Test
     void testActivateService_GroupService_Success() {
         req.setIsGroup(true);
         when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
         when(userRepository.findFirstByGroupId(anyString())).thenReturn(Optional.of(user));
         when(planRepository.findByPlanId(anyString())).thenReturn(Optional.of(plan));
-        when(serviceInstanceRepository.existsByUsernameAndPlanId(anyString(), anyString())).thenReturn(false);
+        when(serviceInstanceRepository.existsByUsernameAndPlanId(anyString(), anyString()))
+                .thenReturn(false);
         when(planToBucketRepository.findByPlanId(anyString())).thenReturn(List.of(ptb));
         when(bucketRepository.findByBucketId(anyString())).thenReturn(Optional.of(bucket));
         when(qosProfileRepository.findById(anyLong())).thenReturn(Optional.of(qos));
-////        when(kafkaEventPublisher.publishServiceEvent(anyString(), any()))
-//                .thenReturn(PublishResult.builder().dcSuccess(true).drSuccess(false).build());
         when(kafkaEventPublisher.publishDBWriteEvent(any()))
-                .thenReturn(PublishResult.builder().dcSuccess(true).drSuccess(false).build());
-//        when(eventMapper.toServiceEvent(any())).thenReturn(new ServiceEvent());
+                .thenReturn(PublishResult.builder().Success(true).build());
         when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
                 .thenReturn(new DBWriteRequestGeneric());
         when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
@@ -1099,56 +365,359 @@ class ServiceProvisioningServiceTest {
         assertEquals(user.getGroupId(), response.getUserId());
     }
 
+    /**
+     * NEW – Kafka complete failure in publishServiceCreatedEvents.
+     * Covers: publishServiceCreatedEvents → result.isCompleteFailure() == true
+     * → throw AAAException(INTERNAL_SERVER_ERROR) branch.
+     */
+    @Test
+    void testActivateService_KafkaCompleteFailure_ShouldThrowInternalError() {
+        when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
+        when(userRepository.findByUserName(anyString())).thenReturn(Optional.of(user));
+        when(planRepository.findByPlanId(anyString())).thenReturn(Optional.of(plan));
+        when(serviceInstanceRepository.existsByUsernameAndPlanId(anyString(), anyString()))
+                .thenReturn(false);
+        when(planToBucketRepository.findByPlanId(anyString())).thenReturn(List.of(ptb));
+        when(bucketRepository.findByBucketId(anyString())).thenReturn(Optional.of(bucket));
+        when(qosProfileRepository.findById(anyLong())).thenReturn(Optional.of(qos));
+        when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
+                .thenReturn(new DBWriteRequestGeneric());
+        when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
+                .thenReturn(new DBWriteRequestGeneric());
+        // Both DC and DR fail → isCompleteFailure() = true
+        when(kafkaEventPublisher.publishDBWriteEvent(any()))
+                .thenReturn(PublishResult.builder().Success(false).build());
+
+        AAAException ex = assertThrows(AAAException.class, () -> service.activateService(req));
+
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, ex.getStatus());
+    }
+
+    /**
+     * NEW – req.quota > 0 exercises applyQuotaToPriorityBucket body.
+     * Covers: applyQuotaToPriorityBucket → stream .min() select, newInitialBalance =
+     * initialBalance + quota, setInitialBalance, setCurrentBalance lines.
+     * finalQuota in the response reflects the top-up (1000 + 500 = 1500).
+     */
+    @Test
+    void testActivateService_WithQuota_AppliedToPriorityBucket() {
+        req.setQuota(500L);
+        plan.setQuotaProrationFlag(false);
+        setupSuccessfulActivation();
+
+        ActiveServiceResponseDTO response = service.activateService(req);
+
+        assertNotNull(response);
+        assertEquals(1500L, response.getFinalQuota());
+    }
+
+    /**
+     * NEW – One-time pack with a valid end-date, full success path.
+     * Covers: provisionOneTimePack (all lines after the null-endDate guard),
+     * setBasicServiceInstanceData (expiryDate from request),
+     * setBucketDetails → recurringFlag=false → expiration = expiryDate branch.
+     * provisionOneTimePack does NOT call existsByUsernameAndPlanId.
+     */
+    @Test
+    void testActivateService_OneTimePack_ValidEndDate_Success() {
+        plan.setRecurringFlag(false);
+        plan.setQuotaProrationFlag(false);
+        req.setServiceEndDate(LocalDateTime.now().plusDays(30));
+
+        when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
+        when(userRepository.findByUserName(anyString())).thenReturn(Optional.of(user));
+        when(planRepository.findByPlanId(anyString())).thenReturn(Optional.of(plan));
+        // No existsByUsernameAndPlanId stub needed for one-time packs
+        when(planToBucketRepository.findByPlanId(anyString())).thenReturn(List.of(ptb));
+        when(bucketRepository.findByBucketId(anyString())).thenReturn(Optional.of(bucket));
+        when(qosProfileRepository.findById(anyLong())).thenReturn(Optional.of(qos));
+        when(kafkaEventPublisher.publishDBWriteEvent(any()))
+                .thenReturn(PublishResult.builder().Success(true).build());
+        when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
+                .thenReturn(new DBWriteRequestGeneric());
+        when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
+                .thenReturn(new DBWriteRequestGeneric());
+
+        ActiveServiceResponseDTO response = service.activateService(req);
+
+        assertNotNull(response);
+        assertEquals("user123", response.getUserId());
+        assertEquals(1000L, response.getFinalQuota());
+    }
+
+    /**
+     * NEW – billing "1" takes the else-branch in setCycleManagementProperties.
+     * Covers: else { cycleStartDate = serviceStartDate.toLocalDate().atStartOfDay(); ... }
+     * and the "1".equals(billing) path in getNumberOfValidityDays.
+     */
+    @Test
+    void testActivateService_BillingType1_CoversCycleElseBranch() {
+        user.setBilling("1");
+        plan.setQuotaProrationFlag(false);
+        setupSuccessfulActivation();
+
+        ActiveServiceResponseDTO response = service.activateService(req);
+
+        assertNotNull(response);
+        assertEquals("user123", response.getUserId());
+    }
+
+    /**
+     * NEW – billing "2" takes the else-if branch in setCycleManagementProperties.
+     * Covers: } else if ("2".equals(billing)) { cycleStartDate = withDayOfMonth(1); ... }
+     * and the "2".equals(billing) path in getNumberOfValidityDays.
+     */
+    @Test
+    void testActivateService_BillingType2_CoversCycleElseIfBranch() {
+        user.setBilling("2");
+        plan.setQuotaProrationFlag(false);
+        setupSuccessfulActivation();
+
+        ActiveServiceResponseDTO response = service.activateService(req);
+
+        assertNotNull(response);
+        assertEquals("user123", response.getUserId());
+    }
+
+    // =========================================================================
+    // UPDATE SERVICE – error paths  (tests 24–30)
+    // =========================================================================
+
+    /** Duplicate requestId yields CONFLICT. */
     @Test
     void testUpdateService_DuplicateRequestId() {
-        UpdateRequestDTO updateDto = new UpdateRequestDTO();
-        updateDto.setRequestId("duplicate-req-123");
         when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(true);
 
         AAAException ex = assertThrows(AAAException.class,
-                () -> service.updateService("user123", "plan123", updateDto));
+                () -> service.updateService("user123", "plan123", "requestId",
+                        new UpdateRequestDTO()));
+
         assertEquals(HttpStatus.CONFLICT, ex.getStatus());
     }
 
-   */
-/* @Test
-    void testUpdateService_KafkaPartialFailure_ServiceEvent() {
-        setupSuccessfulUpdate();
-        when(kafkaEventPublisher.publishServiceEvent(anyString(), any()))
-                .thenReturn(PublishResult.builder().dcSuccess(true).drSuccess(false).build());
-        UpdateRequestDTO updateDto = new UpdateRequestDTO();
-        updateDto.setStatus(2);
-
-        UpdateResponseDTO response = service.updateService("user123", "plan123", updateDto);
-
-        assertNotNull(response);
-        verify(kafkaEventPublisher).publishServiceEvent(anyString(), any());
-    }*//*
-
-
+    /** No service found yields NOT_FOUND. */
     @Test
-    void testUpdateService_KafkaPartialFailure_DBWrite() {
-        setupSuccessfulUpdate();
-        when(kafkaEventPublisher.publishDBWriteEvent(any()))
-                .thenReturn(PublishResult.builder().dcSuccess(false).drSuccess(true).build());
-        UpdateRequestDTO updateDto = new UpdateRequestDTO();
-        updateDto.setServiceStartDate(LocalDateTime.now().plusDays(1));
+    void testUpdateService_ServiceNotFound() {
+        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
+                anyString(), anyString())).thenReturn(Optional.empty());
 
-        UpdateResponseDTO response = service.updateService("user123", "plan123", updateDto);
+        AAAException ex = assertThrows(AAAException.class,
+                () -> service.updateService("user123", "plan123", "requestId",
+                        new UpdateRequestDTO()));
 
-        assertNotNull(response);
+        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
     }
 
+    /** Updating an Inactive service yields CONFLICT. */
     @Test
-    void testDeleteService_KafkaPartialFailure() {
-        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(anyString(), anyString()))
-                .thenReturn(Optional.of(savedServiceInstance));
-        when(bucketInstanceRepository.findByServiceId(anyLong())).thenReturn(List.of(bucketInstance));
-////        when(kafkaEventPublisher.publishServiceEvent(anyString(), any()))
-//                .thenReturn(PublishResult.builder().dcSuccess(false).drSuccess(true).build());
+    void testUpdateService_InactiveService() {
+        savedServiceInstance.setStatus("Inactive");
+        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
+                anyString(), anyString())).thenReturn(Optional.of(savedServiceInstance));
+
+        AAAException ex = assertThrows(AAAException.class,
+                () -> service.updateService("user123", "plan123", "requestId",
+                        new UpdateRequestDTO()));
+
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+    }
+
+    /** Status → Inactive routes to handleServiceInactivation; CoA is fired. */
+    @Test
+    void testUpdateService_StatusToInactive_TriggersDelete() {
+        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
+                anyString(), anyString())).thenReturn(Optional.of(savedServiceInstance));
+        when(bucketInstanceRepository.findByServiceId(anyLong()))
+                .thenReturn(List.of(bucketInstance));
         when(kafkaEventPublisher.publishDBWriteEvent(any()))
-                .thenReturn(PublishResult.builder().dcSuccess(true).drSuccess(false).build());
-//        when(eventMapper.toServiceEvent(any())).thenReturn(new ServiceEvent());
+                .thenReturn(PublishResult.builder().Success(true).build());
+        when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
+                .thenReturn(new DBWriteRequestGeneric());
+        when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
+                .thenReturn(new DBWriteRequestGeneric());
+
+        UpdateRequestDTO dto = new UpdateRequestDTO();
+        dto.setStatus(3); // Inactive
+
+        UpdateResponseDTO response = service.updateService("user123", "plan123", "requestId", dto);
+
+        assertNotNull(response);
+        assertEquals("Inactive", savedServiceInstance.getStatus());
+        verify(coAManagementService)
+                .sendServiceStatusCoARequest(anyString(), anyLong(), argThat(s -> s.equalsIgnoreCase("INACTIVE")));
+    }
+
+    /** Missing bucket yields NOT_FOUND. */
+    @Test
+    void testUpdateService_BucketNotFound() {
+        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
+                anyString(), anyString())).thenReturn(Optional.of(savedServiceInstance));
+        when(bucketInstanceRepository.findFirstByServiceIdOrderByPriorityAsc(anyLong()))
+                .thenReturn(Optional.empty());
+
+        UpdateRequestDTO dto = new UpdateRequestDTO();
+        dto.setQuota(100L); // forces bucket lookup
+
+        AAAException ex = assertThrows(AAAException.class,
+                () -> service.updateService("user123", "plan123", "requestId", dto));
+
+        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
+    }
+
+    /** currentBalance + balanceQuota > initialBalance yields BAD_REQUEST. */
+    @Test
+    void testUpdateService_BalanceQuotaExceedsLimit() {
+        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
+                anyString(), anyString())).thenReturn(Optional.of(savedServiceInstance));
+        when(bucketInstanceRepository.findFirstByServiceIdOrderByPriorityAsc(anyLong()))
+                .thenReturn(Optional.of(bucketInstance));
+
+        UpdateRequestDTO dto = new UpdateRequestDTO();
+        dto.setBalanceQuota(600L); // 500 + 600 = 1100 > 1000 → rejected
+
+        AAAException ex = assertThrows(AAAException.class,
+                () -> service.updateService("user123", "plan123", "requestId", dto));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+    }
+
+    /** End-date before start-date in update yields BAD_REQUEST. */
+    @Test
+    void testUpdateService_InvalidDates_EndBeforeStart() {
+        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
+                anyString(), anyString())).thenReturn(Optional.of(savedServiceInstance));
+
+        UpdateRequestDTO dto = new UpdateRequestDTO();
+        dto.setServiceStartDate(LocalDateTime.now().plusDays(10));
+        dto.setServiceEndDate(LocalDateTime.now().plusDays(5));
+
+        AAAException ex = assertThrows(AAAException.class,
+                () -> service.updateService("user123", "plan123", "requestId", dto));
+
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+    }
+
+    // =========================================================================
+    // UPDATE SERVICE – success paths  (tests 31–35)
+    // =========================================================================
+
+    /** Quota top-up increases initialBalance; event is published. */
+    @Test
+    void testUpdateService_QuotaTopUp_Success() {
+        setupSuccessfulUpdate();
+
+        UpdateRequestDTO dto = new UpdateRequestDTO();
+        dto.setQuota(500L);
+
+        UpdateResponseDTO response = service.updateService("user123", "plan123", "requestId", dto);
+
+        assertNotNull(response);
+        assertEquals(1500L, bucketInstance.getInitialBalance()); // 1000 + 500
+        verify(kafkaEventPublisher, atLeastOnce()).publishDBWriteEvent(any());
+    }
+
+    /**
+     * NEW – balance top-up within the limit succeeds.
+     * Covers: updateBalanceQuotaOfMainBucket → updatedRemainingQuota ≤ initialBalance
+     * → setCurrentBalance(updatedRemainingQuota) success branch.
+     */
+    @Test
+    void testUpdateService_BalanceTopUp_WithinLimit_Success() {
+        setupSuccessfulUpdate();
+
+        UpdateRequestDTO dto = new UpdateRequestDTO();
+        dto.setBalanceQuota(400L); // 500 + 400 = 900 ≤ 1000 → OK
+
+        UpdateResponseDTO response = service.updateService("user123", "plan123", "requestId", dto);
+
+        assertNotNull(response);
+        assertEquals(900L, bucketInstance.getCurrentBalance());
+    }
+
+    /**
+     * NEW – Active → Suspended status change fires a CoA request.
+     * Covers: performServiceUpdate → shouldSendCoA=true (first condition:
+     * oldStatus="Active" && newStatus="Suspended"), sendServiceStatusCoARequest("SUSPENDED").
+     */
+    @Test
+    void testUpdateService_ActiveToSuspended_TriggersCoA() {
+        // savedServiceInstance.status is "Active" from setUp
+        setupSuccessfulUpdate();
+
+        UpdateRequestDTO dto = new UpdateRequestDTO();
+        dto.setStatus(2); // Suspended
+
+        UpdateResponseDTO response = service.updateService("user123", "plan123", "requestId", dto);
+
+        assertNotNull(response);
+        assertEquals("Suspended", savedServiceInstance.getStatus());
+        verify(coAManagementService)
+                .sendServiceStatusCoARequest(eq("user123"), eq(99L), eq("SUSPENDED"));
+    }
+
+    /**
+     * NEW – Suspended → Active status change fires a CoA request.
+     * Covers: performServiceUpdate → shouldSendCoA=true (second condition:
+     * oldStatus="Suspended" && newStatus="Active"), sendServiceStatusCoARequest("ACTIVE").
+     */
+    @Test
+    void testUpdateService_SuspendedToActive_TriggersCoA() {
+        savedServiceInstance.setStatus("Suspended");
+        setupSuccessfulUpdate();
+
+        UpdateRequestDTO dto = new UpdateRequestDTO();
+        dto.setStatus(1); // Active
+
+        UpdateResponseDTO response = service.updateService("user123", "plan123", "requestId", dto);
+
+        assertNotNull(response);
+        assertEquals("Active", savedServiceInstance.getStatus());
+        verify(coAManagementService)
+                .sendServiceStatusCoARequest(eq("user123"), eq(99L), eq("ACTIVE"));
+    }
+
+    /**
+     * NEW – Kafka complete failure in publishServiceUpdatedEvents.
+     * Covers: publishServiceUpdatedEvents → result.isCompleteFailure() == true
+     * → throw AAAException(INTERNAL_SERVER_ERROR) branch.
+     * A quota update produces a non-empty updatedBuckets list, triggering
+     * the bucket-write bundling path as well.
+     */
+    @Test
+    void testUpdateService_KafkaCompleteFailure_ShouldThrowInternalError() {
+        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
+                anyString(), anyString())).thenReturn(Optional.of(savedServiceInstance));
+        when(bucketInstanceRepository.findFirstByServiceIdOrderByPriorityAsc(anyLong()))
+                .thenReturn(Optional.of(bucketInstance));
+        when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
+                .thenReturn(new DBWriteRequestGeneric());
+        when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
+                .thenReturn(new DBWriteRequestGeneric());
+        when(kafkaEventPublisher.publishDBWriteEvent(any()))
+                .thenReturn(PublishResult.builder().Success(false).build());
+
+        UpdateRequestDTO dto = new UpdateRequestDTO();
+        dto.setQuota(100L); // produces non-empty updatedBuckets
+
+        AAAException ex = assertThrows(AAAException.class,
+                () -> service.updateService("user123", "plan123", "requestId", dto));
+
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, ex.getStatus());
+    }
+
+    // =========================================================================
+    // DELETE SERVICE  (tests 36–39)
+    // =========================================================================
+
+    /** Happy-path: events published, CoA fired, response populated. */
+    @Test
+    void testDeleteService_Success() {
+        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
+                anyString(), anyString())).thenReturn(Optional.of(savedServiceInstance));
+        when(bucketInstanceRepository.findByServiceId(anyLong()))
+                .thenReturn(List.of(bucketInstance));
+        when(kafkaEventPublisher.publishDBWriteEvent(any()))
+                .thenReturn(PublishResult.builder().Success(true).build());
         when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
                 .thenReturn(new DBWriteRequestGeneric());
         when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
@@ -1157,30 +726,162 @@ class ServiceProvisioningServiceTest {
         DeleteResponseDTO response = service.deleteService("user123", "plan123", "req-1");
 
         assertNotNull(response);
+        assertEquals("user123", response.getUserId());
+        assertEquals("plan123", response.getPlanId());
+        verify(coAManagementService).sendServiceDeleteCoARequest(eq("user123"), anyLong());
     }
 
+    /** No service found yields NOT_FOUND. */
     @Test
-    void testGetNumberOfValidityDays_Monthly_BillingType1_LeapYear() throws Exception {
-        Method method = ServiceProvisioningService.class.getDeclaredMethod("getNumberOfValidityDays",
-                String.class, String.class, LocalDateTime.class);
-        method.setAccessible(true);
+    void testDeleteService_ServiceNotFound() {
+        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
+                anyString(), anyString())).thenReturn(Optional.empty());
 
-        LocalDateTime date = LocalDateTime.of(2024, 2, 15, 0, 0); // Leap year February
-        Integer days = (Integer) method.invoke(service, "MONTHLY", "1", date);
-        assertEquals(29, days);
+        AAAException ex = assertThrows(AAAException.class,
+                () -> service.deleteService("user123", "plan123", "req-1"));
+
+        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
     }
 
+    /** Repository exception is wrapped and re-thrown as INTERNAL_SERVER_ERROR. */
     @Test
-    void testActivateService_BillingType2_Success() {
-        user.setBilling("2");
-        setupSuccessfulActivation();
+    void testDeleteService_UnexpectedException() {
+        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
+                anyString(), anyString())).thenThrow(new RuntimeException("DB Error"));
 
-        ActiveServiceResponseDTO response = service.activateService(req);
+        AAAException ex = assertThrows(AAAException.class,
+                () -> service.deleteService("user123", "plan123", "req-1"));
+
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, ex.getStatus());
+    }
+
+    /** Multiple bucket instances: one toBucketDBWriteEvent call per bucket. */
+    @Test
+    void testDeleteService_WithMultipleBuckets() {
+        BucketInstance bucket2 = new BucketInstance();
+        bucket2.setId(2L);
+        bucket2.setBucketId("bucket456");
+
+        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
+                anyString(), anyString())).thenReturn(Optional.of(savedServiceInstance));
+        when(bucketInstanceRepository.findByServiceId(anyLong()))
+                .thenReturn(List.of(bucketInstance, bucket2));
+        when(kafkaEventPublisher.publishDBWriteEvent(any()))
+                .thenReturn(PublishResult.builder().Success(true).build());
+        when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
+                .thenReturn(new DBWriteRequestGeneric());
+        when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
+                .thenReturn(new DBWriteRequestGeneric());
+
+        DeleteResponseDTO response = service.deleteService("user123", "plan123", "req-1");
 
         assertNotNull(response);
-        assertEquals("user123", response.getUserId());
-        verify(serviceInstanceRepository).existsByRequestId(anyString());
+        verify(eventMapper, times(2)).toBucketDBWriteEvent(anyString(), any(), anyString());
     }
 
+    // =========================================================================
+    // PRIVATE-METHOD COVERAGE via reflection  (tests 40–42)
+    // =========================================================================
 
-}*/
+    /**
+     * NEW – getProrationFactor with null service dates.
+     * Covers: if (serviceStartDate == null || cycleStartDate == null || cycleEndDate == null)
+     * → throw AAAException(BAD_REQUEST) guard branch.
+     */
+    @Test
+    void testGetProrationFactor_NullServiceDates_ThrowsValidationError() throws Exception {
+        ServiceInstance si = new ServiceInstance();
+        si.setServiceStartDate(null); // null triggers the guard
+
+        Method method = ServiceProvisioningService.class
+                .getDeclaredMethod("getProrationFactor", ServiceInstance.class);
+        method.setAccessible(true);
+
+        Exception wrapper = assertThrows(Exception.class, () -> method.invoke(service, si));
+        assertInstanceOf(AAAException.class, wrapper.getCause());
+        assertEquals(HttpStatus.BAD_REQUEST, ((AAAException) wrapper.getCause()).getStatus());
+    }
+
+    /**
+     * NEW – getProrationFactor when cycleStart == cycleEnd (totalCycleDays == 0).
+     * Covers: if (totalCycleDays == 0) → throw AAAException(BAD_REQUEST) branch.
+     */
+    @Test
+    void testGetProrationFactor_ZeroCycleDays_ThrowsValidationError() throws Exception {
+        LocalDateTime same = LocalDateTime.now();
+        ServiceInstance si = new ServiceInstance();
+        si.setServiceStartDate(same);
+        si.setServiceCycleStartDate(same);
+        si.setServiceCycleEndDate(same); // DAYS.between(same, same) = 0
+
+        Method method = ServiceProvisioningService.class
+                .getDeclaredMethod("getProrationFactor", ServiceInstance.class);
+        method.setAccessible(true);
+
+        Exception wrapper = assertThrows(Exception.class, () -> method.invoke(service, si));
+        assertInstanceOf(AAAException.class, wrapper.getCause());
+    }
+
+    /**
+     * NEW – mapStatus default case (integer value outside 1/2/3).
+     * Covers: default → throw AAAException(BAD_REQUEST) branch in the switch expression.
+     */
+    @Test
+    void testMapStatus_InvalidValue_ThrowsBadRequest() throws Exception {
+        Method method = ServiceProvisioningService.class
+                .getDeclaredMethod("mapStatus", Integer.class);
+        method.setAccessible(true);
+
+        Exception wrapper = assertThrows(Exception.class, () -> method.invoke(null, 99));
+        assertInstanceOf(AAAException.class, wrapper.getCause());
+        assertEquals(HttpStatus.BAD_REQUEST, ((AAAException) wrapper.getCause()).getStatus());
+    }
+
+    // =========================================================================
+    // HELPERS
+    // =========================================================================
+
+    /**
+     * Full happy-path stubs for individual recurring service activation.
+     *
+     * <p><b>Key:</b> {@code publishServiceCreatedEvents} makes exactly ONE
+     * {@code publishDBWriteEvent} call – bucket events travel via
+     * {@code relatedWrites}, not as separate calls.
+     */
+    private void setupSuccessfulActivation() {
+        when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
+        when(userRepository.findByUserName(anyString())).thenReturn(Optional.of(user));
+        when(planRepository.findByPlanId(anyString())).thenReturn(Optional.of(plan));
+        when(serviceInstanceRepository.existsByUsernameAndPlanId(anyString(), anyString()))
+                .thenReturn(false);
+        when(planToBucketRepository.findByPlanId(anyString())).thenReturn(List.of(ptb));
+        when(bucketRepository.findByBucketId(anyString())).thenReturn(Optional.of(bucket));
+        when(qosProfileRepository.findById(anyLong())).thenReturn(Optional.of(qos));
+        when(kafkaEventPublisher.publishDBWriteEvent(any()))
+                .thenReturn(PublishResult.builder().Success(true).build());
+        when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
+                .thenReturn(new DBWriteRequestGeneric());
+        when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
+                .thenReturn(new DBWriteRequestGeneric());
+        // serviceTTLManager.publishServiceTTL is void – Mockito stubs nothing by default
+    }
+
+    /**
+     * Minimal happy-path stubs for service update.
+     *
+     * <p>lenient() on Kafka/mapper stubs prevents "unnecessary stubbing" failures
+     * in tests that exit before reaching the publish step (e.g. date-validation tests).
+     */
+    private void setupSuccessfulUpdate() {
+        when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
+                anyString(), anyString())).thenReturn(Optional.of(savedServiceInstance));
+        when(bucketInstanceRepository.findFirstByServiceIdOrderByPriorityAsc(anyLong()))
+                .thenReturn(Optional.of(bucketInstance));
+        lenient().when(kafkaEventPublisher.publishDBWriteEvent(any()))
+                .thenReturn(PublishResult.builder().Success(true).build());
+        lenient().when(eventMapper.toServiceDBWriteEvent(anyString(), any()))
+                .thenReturn(new DBWriteRequestGeneric());
+        lenient().when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
+                .thenReturn(new DBWriteRequestGeneric());
+    }
+}
