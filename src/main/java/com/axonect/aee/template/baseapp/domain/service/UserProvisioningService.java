@@ -128,12 +128,8 @@ public class UserProvisioningService {
         try {
             log.info(LogMessages.USER_CREATE_REQUEST, request.getUserName());
 
-            asyncValidate(request);
-            validateGroupBillingConsistency(request);
-            Long templateId = getTemplateIdOrDefault(request);
+            // 1. Pure-logic validations (fast, fail-fast for invalid requests — no DB I/O)
             validateEncryptionMethod(request);
-            //validateContactNumbers(request);
-            //validateContactEmails(request);
             validateNasPortType(request);
             validateIpAllocationValue(request);
             validateNetworkRules(request);
@@ -146,8 +142,14 @@ public class UserProvisioningService {
 
             validateBandwidthForGroup(request, groupId);
 
+            // 2. Parse MAC addresses (pure logic, no I/O) — format + in-request dedup
+            List<String> normalizedMacs = parseMacsForCheck(request.getMacAddress());
+
+            // 3. Run ALL DB reads concurrently: username, requestId, MAC, group billing, template
+            ValidationResult validation = parallelDbValidate(request, groupId, normalizedMacs);
+
             //     BUILD user entity (don't save to DB)
-            UserEntity user = mapToEntity(request, groupId, templateId);
+            UserEntity user = mapToEntity(request, groupId, validation.templateId());
 
             //     Generate userId manually (since @PrePersist won't run)
             user.setUserId(generateUserId());
@@ -158,10 +160,8 @@ public class UserProvisioningService {
                 user.setMacAddress(request.getMacAddress());
             }
 
-            //     Fetch template name
-            if (user.getTemplateId() != null) {
-                superTemplateRepository.findById(user.getTemplateId()).ifPresent(template -> user.setTemplateName(template.getTemplateName()));
-            }
+            //     Set template name from cached parallel-fetch result (no second DB round-trip)
+            user.setTemplateName(validation.templateName());
 
             //  PUBLISH TO KAFKA (blocking — must succeed)
             publishUserCreatedEvents(user);
@@ -199,6 +199,156 @@ public class UserProvisioningService {
         return "USR" + timestamp + String.format("%04d", random);
     }
 
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Parallel DB validation (replaces sequential asyncValidate +
+    // validateGroupBillingConsistency + getTemplateIdOrDefault)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /** Holds the results needed from the parallel DB validation phase. */
+    private record ValidationResult(Long templateId, String templateName) {}
+
+    /**
+     * Runs all DB reads for createUser concurrently, then validates results.
+     * Reduces latency by eliminating sequential round-trips for:
+     *   existsByUserName, existsByRequestId, MAC lookup,
+     *   group-billing reference user, and template fetch.
+     */
+    @SneakyThrows
+    private ValidationResult parallelDbValidate(CreateUserRequest request,
+                                                String groupId,
+                                                List<String> normalizedMacs) {
+
+        boolean needsGroupCheck = StringUtils.hasText(request.getGroupId())
+                && !"1".equals(request.getGroupId());
+        boolean templateIdProvided = request.getTemplateId() != null;
+
+        CompletableFuture<Object>[] futures = asyncAdaptor.supplyAll(
+                2000L,
+                // [0] duplicate username
+                () -> userRepository.existsByUserName(request.getUserName()),
+                // [1] duplicate requestId
+                () -> userRepository.existsByRequestId(request.getRequestId()),
+                // [2] MAC existence in DB
+                () -> normalizedMacs.isEmpty()
+                        ? Collections.<UserToMac>emptyList()
+                        : userToMacRepository.findByMacAddressIn(normalizedMacs),
+                // [3] group billing reference user (skipped for default group)
+                () -> needsGroupCheck
+                        ? userRepository.findFirstByGroupId(request.getGroupId())
+                        : Optional.<UserEntity>empty(),
+                // [4] template fetch (by provided ID or default)
+                () -> templateIdProvided
+                        ? superTemplateRepository.findById(request.getTemplateId())
+                                .orElseThrow(() -> new AAAException(
+                                        LogMessages.ERROR_NOT_FOUND,
+                                        "Template with ID " + request.getTemplateId() + " not found",
+                                        HttpStatus.NOT_FOUND))
+                        : superTemplateRepository.findByIsDefault(true)
+                                .orElseThrow(() -> new AAAException(
+                                        LogMessages.ERROR_NOT_FOUND,
+                                        "No default template configured in the system",
+                                        HttpStatus.NOT_FOUND))
+        );
+
+        // All futures are already completed — .get() / .join() will not block
+        if ((Boolean) futures[0].get()) {
+            log.warn(LogMessages.DUPLICATE_USER, request.getUserName());
+            throw new AAAException(LogMessages.ERROR_DUPLICATE_USER,
+                    "User '" + request.getUserName() + ALREADY_EXISTS, HttpStatus.CONFLICT);
+        }
+
+        if ((Boolean) futures[1].get()) {
+            log.warn(LogMessages.DUPLICATE_REQUEST_ID, request.getRequestId());
+            throw new AAAException(LogMessages.ERROR_DUPLICATE_REQ,
+                    "Request ID '" + request.getRequestId() + ALREADY_EXISTS, HttpStatus.CONFLICT);
+        }
+
+        @SuppressWarnings("unchecked")
+        List<UserToMac> existingMacs = (List<UserToMac>) futures[2].get();
+        validateMacsDbResult(request.getMacAddress(), normalizedMacs, existingMacs);
+
+        if (needsGroupCheck) {
+            @SuppressWarnings("unchecked")
+            Optional<UserEntity> groupUser = (Optional<UserEntity>) futures[3].get();
+            validateGroupBillingFromResult(groupUser, request);
+        }
+
+        SuperTemplate template = (SuperTemplate) futures[4].get();
+        return new ValidationResult(template.getId(), template.getTemplateName());
+    }
+
+    /**
+     * Parses and format-validates MAC addresses from the request.
+     * Deduplication uses O(1) HashSet.add(), replacing the previous O(n) stream scan.
+     * Returns normalized MACs for the DB existence check.
+     */
+    private List<String> parseMacsForCheck(String macAddress) {
+        if (macAddress == null || macAddress.isBlank()) {
+            return Collections.emptyList();
+        }
+        Set<String> seen = new HashSet<>();
+        List<String> normalized = new ArrayList<>();
+        for (String rawMac : macAddress.split(",")) {
+            String mac = rawMac.trim();
+            if (mac.isEmpty()) continue;
+            validateMacFormat(mac);
+            String norm = normalizeMacAddress(mac);
+            if (!seen.add(norm)) {   // add() returns false on duplicate — O(1)
+                throw new AAAException(LogMessages.ERROR_VALIDATION_FAILED,
+                        "Duplicate MAC address found in request: " + mac, HttpStatus.BAD_REQUEST);
+            }
+            normalized.add(norm);
+        }
+        return normalized;
+    }
+
+    /**
+     * Validates MAC addresses against DB results using an O(n) HashSet lookup,
+     * replacing the previous O(n×m) nested loop.
+     */
+    private void validateMacsDbResult(String originalMacStr,
+                                      List<String> normalizedMacs,
+                                      List<UserToMac> existingMacs) {
+        if (existingMacs.isEmpty()) return;
+        Set<String> checkSet = new HashSet<>(normalizedMacs);
+        for (UserToMac existing : existingMacs) {
+            if (checkSet.contains(existing.getMacAddress().toLowerCase())) {
+                String original = findOriginalMacFormat(originalMacStr,
+                        existing.getMacAddress().toLowerCase());
+                throw new AAAException(LogMessages.ERROR_VALIDATION_FAILED,
+                        "MAC address '" + original + ALREADY_EXISTS, HttpStatus.CONFLICT);
+            }
+        }
+    }
+
+    /**
+     * Validates group billing consistency from an already-fetched reference user,
+     * replacing the DB query inside validateGroupBillingConsistency.
+     */
+    private void validateGroupBillingFromResult(Optional<UserEntity> existingGroupUser,
+                                                CreateUserRequest request) {
+        if (existingGroupUser.isEmpty()) return;
+        UserEntity ref = existingGroupUser.get();
+        if (!ref.getBilling().equals(request.getBilling())) {
+            log.error("Billing mismatch for groupId: {}. Expected: {}, Provided: {}",
+                    request.getGroupId(), ref.getBilling(), request.getBilling());
+            throw new AAAException(LogMessages.USER_VALIDATION_ERROR_CODE,
+                    String.format("Billing value mismatch for group %s. All users in the same group must "
+                                    + "have the same billing type. Expected: %s, Provided: %s",
+                            request.getGroupId(), ref.getBilling(), request.getBilling()),
+                    HttpStatus.BAD_REQUEST);
+        }
+        if (!Objects.equals(ref.getCycleDate(), request.getCycleDate())) {
+            log.error("Cycle date mismatch for groupId: {}. Expected: {}, Provided: {}",
+                    request.getGroupId(), ref.getCycleDate(), request.getCycleDate());
+            throw new AAAException(LogMessages.USER_VALIDATION_ERROR_CODE,
+                    String.format("Cycle date mismatch for group %s. All users in the same group must "
+                                    + "have the same cycle date. Expected: %s, Provided: %s",
+                            request.getGroupId(), ref.getCycleDate(), request.getCycleDate()),
+                    HttpStatus.BAD_REQUEST);
+        }
+    }
 
     @SneakyThrows
     private void asyncValidate(CreateUserRequest request) {
@@ -863,10 +1013,8 @@ public class UserProvisioningService {
             Set<String> normalizedMacs,
             String normalizedMac) {
 
-        boolean duplicate = normalizedMacs.stream()
-                .anyMatch(existing -> existing.equalsIgnoreCase(normalizedMac));
-
-        if (duplicate) {
+        // normalizedMac is already lowercase; normalizedMacs stores lowercase values → O(1) lookup
+        if (normalizedMacs.contains(normalizedMac)) {
             throw new AAAException(
                     LogMessages.ERROR_VALIDATION_FAILED,
                     "Duplicate MAC address found in request: " + originalMac,
@@ -889,21 +1037,23 @@ public class UserProvisioningService {
                         user.getUserName()
                 );
 
-        for (UserToMac userToMac : existingMacRecords) {
-            for (String checkMac : macsToCheck) {
-                if (userToMac.getMacAddress().equalsIgnoreCase(checkMac)) {
-                    String duplicateMac =
-                            findOriginalMacFormat(request.getMacAddress(), checkMac);
-
-                    throw new AAAException(
-                            LogMessages.ERROR_VALIDATION_FAILED,
-                            "MAC address '" + duplicateMac + "' already exists for another user",
-                            HttpStatus.CONFLICT
-                    );
-                }
-            }
+        if (existingMacRecords.isEmpty()) {
+            return;
         }
 
+        // O(n) HashSet lookup replaces O(n×m) nested loop
+        Set<String> checkSet = new HashSet<>(macsToCheck);
+        for (UserToMac userToMac : existingMacRecords) {
+            String dbMac = userToMac.getMacAddress().toLowerCase();
+            if (checkSet.contains(dbMac)) {
+                String duplicateMac = findOriginalMacFormat(request.getMacAddress(), dbMac);
+                throw new AAAException(
+                        LogMessages.ERROR_VALIDATION_FAILED,
+                        "MAC address '" + duplicateMac + "' already exists for another user",
+                        HttpStatus.CONFLICT
+                );
+            }
+        }
     }
 
 
