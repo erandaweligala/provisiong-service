@@ -131,7 +131,7 @@ spring:
       group-id: spring-reply-group-provisioning   # UPDATED from local — was spring-reply-group; UNIQUE to provisioning service
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      auto-offset-reset: latest
+      auto-offset-reset: earliest   # Re-read unconsumed reply messages after pod restart
       enable-auto-commit: true
       properties:
         fetch.min.bytes: 1
