@@ -45,8 +45,11 @@ app:
     # Each pod owns one partition: pod-N → partition (N % reply.partitions).
     # If partitions < pod count, ordinals wrap and two pods share a partition,
     # causing the other pod's reply to be silently discarded (intermittent timeout).
+    # Current Kafka topic has 5 partitions → safe up to 5 pods.
+    # To scale beyond 5 pods, first expand the Kafka topic partition count,
+    # then raise this value to match.
     reply:
-      partitions: 20
+      partitions: 5
 
     publish:
       timeout-ms: 10000
