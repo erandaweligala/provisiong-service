@@ -41,6 +41,12 @@ app:
       notification: dc-provisioning
       db-write: dc-provisioning
 
+    # Must be > max expected pod replica count.
+    # Each pod owns one partition: pod-N → partition (N % reply.partitions).
+    # If partitions < pod count, ordinals wrap and two pods share a partition,
+    # causing the other pod's reply to be silently discarded (intermittent timeout).
+    reply:
+      partitions: 20
 
     publish:
       timeout-ms: 10000

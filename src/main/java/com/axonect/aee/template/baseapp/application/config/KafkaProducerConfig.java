@@ -24,8 +24,6 @@ import java.util.Map;
 public class KafkaProducerConfig {
 
 
-    static final int REPLY_TOPIC_PARTITIONS = 3;
-
     private static final String REPLY_GROUP_ID = "spring-reply-group-provisioning";
 
     @Value("${spring.kafka.bootstrap-servers}")
@@ -34,7 +32,12 @@ public class KafkaProducerConfig {
     @Value("${kafka.reply.topic:db-write-events-reply}")
     private String replyTopic;
 
-
+    // Must be strictly greater than the maximum expected pod replica count so that
+    // ordinal % replyTopicPartitions is unique per pod (no two pods collide on the
+    // same reply partition).  With 3 here pod-3 wraps back to partition 0, stealing
+    // replies from pod-0 and causing intermittent timeouts.
+    @Value("${app.kafka.reply.partitions:20}")
+    private int replyTopicPartitions;
 
     @Value("${app.kafka.publish.timeout-ms:10000}")
     private long publishTimeoutMs;
@@ -49,12 +52,12 @@ public class KafkaProducerConfig {
             if (dashIdx >= 0) {
                 try {
                     int ordinal = Integer.parseInt(hostname.substring(dashIdx + 1));
-                    return ordinal % REPLY_TOPIC_PARTITIONS;
+                    return ordinal % replyTopicPartitions;
                 } catch (NumberFormatException ignored) {
                     // Deployment random suffix – fall through to hash
                 }
             }
-            return Math.abs(hostname.hashCode()) % REPLY_TOPIC_PARTITIONS;
+            return Math.abs(hostname.hashCode()) % replyTopicPartitions;
         }
         return 0;
     }
@@ -156,6 +159,6 @@ public class KafkaProducerConfig {
 
     @Bean
     public NewTopic replyTopic() {
-        return TopicBuilder.name(replyTopic).partitions(3).replicas(1).build();
+        return TopicBuilder.name(replyTopic).partitions(replyTopicPartitions).replicas(1).build();
     }
 }
