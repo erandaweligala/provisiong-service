@@ -38,13 +38,17 @@ public class KafkaEventPublisher {
     private final ReplyingKafkaTemplate<String, Object, String> replyingKafkaTemplate;
 
     // ── Timeout / retry knobs ────────────────────────────────────────────────
-    @Value("${app.kafka.publish.timeout-ms:2000}")
+    @Value("${app.kafka.publish.timeout-ms:10000}")
     private long publishTimeoutMs;
+
+    // Broker-ACK wait is bounded by Kafka's own DELIVERY_TIMEOUT_MS (5 s).
+    // Keeping it shorter than publishTimeoutMs preserves the reply window.
+    private static final long BROKER_ACK_TIMEOUT_MS = 6000L;
 
     @Value("${app.kafka.publish.retry.enabled:true}")
     private boolean retryEnabled;
 
-    @Value("${app.kafka.publish.retry.max-attempts:2}")
+    @Value("${app.kafka.publish.retry.max-attempts:3}")
     private int maxRetryAttempts;
 
     // ── Topic names ──────────────────────────────────────────────────────────
@@ -96,7 +100,7 @@ public class KafkaEventPublisher {
 
     private void logBrokerAck(RequestReplyFuture<String, Object, String> future,
                               String eventType, String key) throws Exception {
-        SendResult<String, Object> sendResult = future.getSendFuture().get(publishTimeoutMs, TimeUnit.MILLISECONDS);
+        SendResult<String, Object> sendResult = future.getSendFuture().get(BROKER_ACK_TIMEOUT_MS, TimeUnit.MILLISECONDS);
         log.debug("Broker ACK received for {} event (key: '{}') – Partition: {}, Offset: {}",
                 eventType, key,
                 sendResult.getRecordMetadata().partition(),

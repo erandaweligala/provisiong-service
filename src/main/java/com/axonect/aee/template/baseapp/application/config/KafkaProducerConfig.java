@@ -36,6 +36,9 @@ public class KafkaProducerConfig {
 
 
 
+    @Value("${app.kafka.publish.timeout-ms:10000}")
+    private long publishTimeoutMs;
+
     @Value("${app.kafka.topic.db-write}")
     private String dbWriteTopic;
 
@@ -119,8 +122,8 @@ public class KafkaProducerConfig {
             ConcurrentMessageListenerContainer<String, String> replyContainer) {
         ReplyingKafkaTemplate<String, Object, String> template =
                 new ReplyingKafkaTemplate<>(pf, replyContainer);
-        // Hard ceiling — must be >= publishTimeoutMs in KafkaEventPublisher
-        template.setDefaultReplyTimeout(Duration.ofMillis(2500));
+        // Must be >= publishTimeoutMs in KafkaEventPublisher
+        template.setDefaultReplyTimeout(Duration.ofMillis(publishTimeoutMs));
         return template;
     }
 

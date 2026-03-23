@@ -43,10 +43,10 @@ app:
 
 
     publish:
-      timeout-ms: 5000
+      timeout-ms: 10000
       retry:
         enabled: true
-        max-attempts: 2      #need to change in OCP
+        max-attempts: 3
       require-both-ack: false
 
     verification: #need to change in OCP
