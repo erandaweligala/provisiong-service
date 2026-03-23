@@ -51,6 +51,12 @@ public class KafkaEventPublisher {
     @Value("${app.kafka.publish.retry.max-attempts:3}")
     private int maxRetryAttempts;
 
+    // When false: publish fire-and-forget (broker ACK only, no consumer reply wait).
+    // When true:  publish request-reply (wait for downstream consumer SUCCESS reply).
+    // Current config: false — downstream reply infrastructure not yet active.
+    @Value("${app.kafka.publish.require-both-ack:false}")
+    private boolean requireBothAck;
+
     // ── Topic names ──────────────────────────────────────────────────────────
     @Value("${app.kafka.topic.db-write}")
     private String dbWriteTopic;
@@ -69,7 +75,11 @@ public class KafkaEventPublisher {
         while (attempt < maxRetryAttempts) {
             attempt++;
             try {
-                return sendAndAwaitReply(topic, key, payload, eventType);
+                if (requireBothAck) {
+                    return sendAndAwaitReply(topic, key, payload, eventType);
+                } else {
+                    return sendAndAwaitBrokerAck(topic, key, payload, eventType);
+                }
             } catch (ConsumerReplyException e) {
                 throw e;
             } catch (Exception e) {
@@ -81,9 +91,23 @@ public class KafkaEventPublisher {
         return false;
     }
 
+    // ── require-both-ack: false ── broker ACK only, no consumer reply wait ──
+
+    private boolean sendAndAwaitBrokerAck(String topic, String key, Object payload, String eventType) throws Exception {
+        SendResult<String, Object> result = kafkaObjectTemplate
+                .send(topic, key, payload)
+                .get(BROKER_ACK_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        log.info("Broker ACK for {} event (key: '{}') – partition {}, offset {}",
+                eventType, key,
+                result.getRecordMetadata().partition(),
+                result.getRecordMetadata().offset());
+        return true;
+    }
+
+    // ── require-both-ack: true ── full request-reply, consumer must respond ──
+
     private boolean sendAndAwaitReply(String topic, String key, Object payload, String eventType) throws Exception {
         ProducerRecord<String, Object> producerRecord = new ProducerRecord<>(topic, key, payload);
-
 
         producerRecord.headers().add(new RecordHeader(
                 KafkaHeaders.REPLY_PARTITION,
