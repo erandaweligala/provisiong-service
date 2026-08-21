@@ -1,0 +1,35 @@
+# Tells the Prometheus Operator to scrape the Micrometer endpoint of
+# airtel-aaa-user-provisioning-service.
+#
+#     oc -n airtel-aaa apply -f servicemonitor.yaml
+#
+# Check `spec.selector.matchLabels` against the labels on the actual Service
+# (`oc -n airtel-aaa get svc --show-labels`) before applying - a ServiceMonitor
+# that matches nothing is accepted silently and simply never scrapes.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: airtel-aaa-user-provisioning-service
+  namespace: airtel-aaa
+  labels:
+    app: airtel-aaa-user-provisioning-service
+spec:
+  namespaceSelector:
+    matchNames:
+      - airtel-aaa
+  selector:
+    matchLabels:
+      app: airtel-aaa-user-provisioning-service
+  endpoints:
+    - port: http                     # name of the Service port, not its number
+      path: /actuator/prometheus
+      scheme: http
+      interval: 30s
+      scrapeTimeout: 10s
+      relabelings:
+        # Keeps the pod name on every series so a single misbehaving replica can
+        # be told apart on the dashboard.
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace

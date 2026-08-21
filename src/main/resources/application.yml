@@ -268,3 +268,93 @@ ip-ping:
 radius:
   server:
     base-url: http://airtel-aaa-radius-server-service.csg-aaa-app.cluster.local:8080
+# ---------------------------------------------------------------------------
+# REST endpoint availability monitoring (Grafana)
+#
+# Each entry becomes an `api` tag on http_server_requests, which is what the
+# Grafana dashboard in monitoring/grafana groups by. `uris` must hold the
+# Spring URI templates of the handler - path variable names are ignored when
+# matching, but the path structure must be exact, so keep this list in step
+# with the controllers.
+#
+# threshold-ms is the "Response Time Threshold" column of the API sheet; it
+# defaults to default-threshold-ms when omitted.
+# ---------------------------------------------------------------------------
+monitoring:
+  api:
+    enabled: true
+    microservice: airtel-aaa-user-provisioning-service
+    default-threshold-ms: 2000
+    # Full percentile histograms give smoother quantiles but roughly 5x the
+    # series count; the explicit buckets below are enough for the dashboard.
+    percentiles-histogram: false
+
+    # Active checks. Disabled by default: enabling it makes the pod issue real
+    # HTTP calls, so only endpoints with a probe-path are ever called and only
+    # GETs are allowed. See monitoring/README.md before switching this on.
+    probe:
+      enabled: false
+      base-url: http://localhost:8089
+      interval: 60s
+      timeout: 5s
+
+    endpoints:
+      - name: create_user
+        title: Create user
+        method: POST
+        uris:
+          - /api/user
+
+      - name: update_user
+        title: Update User
+        method: PATCH
+        uris:
+          - /api/user/{user_name}
+
+      - name: delete_user
+        title: Delete user
+        method: DELETE
+        uris:
+          - /api/user/{user_name}
+
+      - name: activate_user
+        title: Activate user
+        method: POST
+        uris:
+          - /api/services/activate
+
+      # updateService and deleteService are each mapped to two paths; both are
+      # listed so either spelling lands on the same time series.
+      - name: update_service
+        title: Update service
+        method: PATCH
+        uris:
+          - /api/user/{user_id}/services/{plan_id}/{request_id}
+          - /api/user/services/{user_id}/{plan_id}/{request_id}
+
+      - name: delete_service
+        title: Delete service
+        method: DELETE
+        uris:
+          - /api/user/{user_id}/services/{plan_id}/{request_id}
+          - /api/user/services/{user_id}/{plan_id}/{request_id}
+
+      - name: get_user
+        title: Get user
+        method: GET
+        uris:
+          - /api/user/{user_name}
+
+      - name: get_users
+        title: Get users
+        method: GET
+        uris:
+          - /api/user
+
+      # The API sheet lists this as /api/v1/service-lines/{id}/status; the path
+      # actually served by UserController#getServiceDetails is the one below.
+      - name: query_user_information
+        title: Query User information
+        method: GET
+        uris:
+          - /api/user/service-lines/status/{serviceLineNumber}
