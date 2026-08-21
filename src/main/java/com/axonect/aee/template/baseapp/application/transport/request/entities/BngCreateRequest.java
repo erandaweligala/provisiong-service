@@ -19,7 +19,6 @@ public class BngCreateRequest {
     @NotBlank(message = "bngName is mandatory")
     private String bngName;
 
-    @NotBlank(message = "bngIp is mandatory")
     private String bngIp;
 
     @NotBlank(message = "bngTypeVendor is mandatory")
@@ -34,13 +33,10 @@ public class BngCreateRequest {
     @NotBlank(message = "nasIdentifier is mandatory")
     private String nasIdentifier;
 
-    @NotBlank(message = "coaIp is mandatory")
     private String coaIp;
 
-    @NotNull(message = "coaPort is mandatory")
     private Integer coaPort;
 
-    @NotBlank(message = "sharedSecret is mandatory")
     private String sharedSecret;
 
     @NotBlank(message = "location is mandatory")

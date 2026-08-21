@@ -2,13 +2,14 @@ package com.axonect.aee.template.baseapp.domain.service;
 
 import com.axonect.aee.template.baseapp.application.config.KafkaEventPublisher;
 import com.axonect.aee.template.baseapp.application.repository.*;
-import com.axonect.aee.template.baseapp.domain.adapter.AsyncAdaptorInterface;
 import com.axonect.aee.template.baseapp.application.transport.request.entities.ActiveServiceRequestDTO;
 import com.axonect.aee.template.baseapp.application.transport.request.entities.UpdateRequestDTO;
 import com.axonect.aee.template.baseapp.application.transport.response.transformers.ActiveServiceResponseDTO;
 import com.axonect.aee.template.baseapp.application.transport.response.transformers.DeleteResponseDTO;
 import com.axonect.aee.template.baseapp.application.transport.response.transformers.UpdateResponseDTO;
+import com.axonect.aee.template.baseapp.domain.adapter.AsyncAdaptorInterface;
 import com.axonect.aee.template.baseapp.domain.entities.dto.*;
+import com.axonect.aee.template.baseapp.domain.enums.UserStatus;
 import com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric;
 import com.axonect.aee.template.baseapp.domain.events.EventMapper;
 import com.axonect.aee.template.baseapp.domain.events.PublishResult;
@@ -28,9 +29,10 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Service
@@ -56,6 +58,7 @@ public class ServiceProvisioningService {
     private static final String DELETE = "DELETE";
     private static final String UPDATE = "UPDATE";
     private static final String SUSPENDED = "Suspended";
+    private final AccountingCacheManagementService accountingCacheManagementService;
 
     /**
      * Generates a fast, non-cryptographic internal ID.
@@ -106,6 +109,7 @@ public class ServiceProvisioningService {
                     "Service Activation"
             );
 
+
             //  CHECK if request ID already exists (READ-ONLY)
             boolean requestExists = serviceInstanceRepository.existsByRequestId(request.getRequestId());
             if (requestExists) {
@@ -123,17 +127,21 @@ public class ServiceProvisioningService {
             ServiceInstance serviceInstance;
             List<BucketInstance> bucketInstances;
 
+            ServiceActivationResult result;
             if (isGroup) {
-                var result = activateGroupService(request);
-                serviceInstance = result.serviceInstance;
-                bucketInstances = result.bucketInstances;
+                result = activateGroupService(request);
             } else {
-                var result = activateIndividualService(request);
-                serviceInstance = result.serviceInstance;
-                bucketInstances = result.bucketInstances;
+                result = activateIndividualService(request);
             }
+            serviceInstance = result.serviceInstance;
+            bucketInstances = result.bucketInstances;
 
             publishServiceCreatedEvents(serviceInstance, bucketInstances);
+            accountingCacheManagementService.syncBuckets(
+                    bucketInstances,
+                    result.user != null ? result.user.getSessionTimeout() : String.valueOf(86400L),
+                    result.user != null && result.user.getConcurrency() != null ? result.user.getConcurrency() : 5L,
+                    serviceInstance);
 
             log.info("Service activation completed successfully for User ID: {}, Plan ID: {}, Service Instance ID: {}",
                     serviceInstance.getUsername(), serviceInstance.getPlanId(), serviceInstance.getId());
@@ -170,14 +178,16 @@ public class ServiceProvisioningService {
         }
     }
 
-    //  HELPER CLASS to return both service and buckets
+    //  HELPER CLASS to return service, buckets, and user for sync
     private static class ServiceActivationResult {
         ServiceInstance serviceInstance;
         List<BucketInstance> bucketInstances;
+        UserEntity user;
 
-        ServiceActivationResult(ServiceInstance serviceInstance, List<BucketInstance> bucketInstances) {
+        ServiceActivationResult(ServiceInstance serviceInstance, List<BucketInstance> bucketInstances, UserEntity user) {
             this.serviceInstance = serviceInstance;
             this.bucketInstances = bucketInstances;
+            this.user = user;
         }
     }
 
@@ -197,7 +207,16 @@ public class ServiceProvisioningService {
 
             UserEntity user = userFuture.join();
             log.debug("Group found: {}", groupId);
-            validateUserStatus(user, "Group Service Activation");
+            boolean hasActiveUsers = userRepository.existsByGroupIdAndStatus(groupId, UserStatus.ACTIVE);
+
+            if (!hasActiveUsers) {
+                log.error("No active users found for the group: {}", groupId);
+                throw new AAAException(
+                        LogMessages.ERROR_POLICY_CONFLICT,
+                        "Cannot activate service for inactive group: " + groupId,
+                        HttpStatus.UNPROCESSABLE_ENTITY
+                );
+            }
 
             Plan plan = planFuture.join();
             log.debug("Plan was found: {} ({}), Recurring: {}", plan.getPlanName(), plan.getPlanType(), plan.getRecurringFlag());
@@ -211,12 +230,12 @@ public class ServiceProvisioningService {
             List<BucketInstance> bucketInstances = subscribeResources(user, plan, serviceInstance, request, true);
 
             log.info("Group service activation completed successfully for Group: {}", groupId);
-            return new ServiceActivationResult(serviceInstance, bucketInstances);
+            return new ServiceActivationResult(serviceInstance, bucketInstances, user);
         } catch (AAAException ex) {
             throw ex;
         } catch (Exception ex) {
             log.error("Error during group service activation", ex);
-            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, ex.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, "Error during group service activation", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -226,7 +245,6 @@ public class ServiceProvisioningService {
             String userName = request.getUserId();
             String planId = request.getPlanId();
 
-            //   READ-ONLY: Fetch user and plan in parallel — independent queries
             CompletableFuture<UserEntity> userFuture = CompletableFuture.supplyAsync(() ->
                     userRepository.findByUserName(userName)
                             .orElseThrow(() -> new AAAException(LogMessages.ERROR_NOT_FOUND, "USER_NOT_FOUND", HttpStatus.NOT_FOUND)));
@@ -234,28 +252,39 @@ public class ServiceProvisioningService {
                     planRepository.findByPlanId(planId)
                             .orElseThrow(() -> new AAAException(LogMessages.ERROR_NOT_FOUND, "PLAN_DOES_NOT_EXIST", HttpStatus.NOT_FOUND)));
 
-            UserEntity user = userFuture.join();
+            // Unwrap CompletionException so AAAExceptions propagate correctly
+            UserEntity user;
+            Plan plan;
+            try {
+                user = userFuture.join();
+                plan = planFuture.join();
+            } catch (CompletionException ex) {
+                Throwable cause = ex.getCause();
+                if (cause instanceof AAAException aaaEx) {
+                    throw aaaEx;
+                }
+                throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, "Error during individual service activation", HttpStatus.INTERNAL_SERVER_ERROR);
+            }
+
             log.debug("User found: {} with billing type: {}", userName, user.getBilling());
             validateUserStatus(user, "Individual Service Activation");
 
-            Plan plan = planFuture.join();
             log.debug("Plan found: {} ({}), Recurring: {}", plan.getPlanName(), plan.getPlanType(), plan.getRecurringFlag());
 
             if (!plan.getStatus().equalsIgnoreCase(ACTIVE)) {
                 throw new AAAException(LogMessages.ERROR_POLICY_CONFLICT, "PLAN_IS_NOT_ACTIVE", HttpStatus.UNPROCESSABLE_ENTITY);
             }
 
-            //   BUILD service instance (no DB save)
             ServiceInstance serviceInstance = new ServiceInstance();
             List<BucketInstance> bucketInstances = subscribeResources(user, plan, serviceInstance, request, false);
 
             log.info("Individual service activation completed successfully for User: {}", userName);
-            return new ServiceActivationResult(serviceInstance, bucketInstances);
+            return new ServiceActivationResult(serviceInstance, bucketInstances, user);
         } catch (AAAException ex) {
             throw ex;
         } catch (Exception ex) {
             log.error("Error during individual service activation", ex);
-            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, ex.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, "Error during individual service activation", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -308,7 +337,7 @@ public class ServiceProvisioningService {
             throw ex;
         } catch (Exception ex) {
             log.error("Error subscribing resources for User: {}", user.getUserName(), ex);
-            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, ex.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, "Error subscribing resources", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -360,7 +389,7 @@ public class ServiceProvisioningService {
             throw ex;
         } catch (Exception ex) {
             log.error("Error provisioning recurring pack for User: {}, Plan: {}", user.getUserName(), plan.getPlanId(), ex);
-            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, ex.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, "Error provisioning recurring pack", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -397,7 +426,7 @@ public class ServiceProvisioningService {
             throw ex;
         } catch (Exception ex) {
             log.error("Error provisioning one-time pack for User: {}, Plan: {}", user.getUserName(), plan.getPlanId(), ex);
-            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, ex.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, "Error provisioning one-time pack", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -445,7 +474,7 @@ public class ServiceProvisioningService {
         } catch (Exception ex) {
             log.error("Error provisioning quota for Service Instance ID: {}, Plan: {}",
                     serviceInstance.getId(), planId, ex);
-            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, ex.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, "Error provisioning quota for Service Instance", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -499,7 +528,7 @@ public class ServiceProvisioningService {
                     serviceInstance.getId(), ex);
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    "Error during prorated quota provision: " + ex.getMessage(),
+                    "Error during prorated quota provision",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -533,7 +562,7 @@ public class ServiceProvisioningService {
         } catch (Exception ex) {
             log.error("Error during direct quota provision for Service Instance ID: {}",
                     serviceInstance.getId(), ex);
-            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, ex.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, "Error during direct quota provision", HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -542,11 +571,12 @@ public class ServiceProvisioningService {
     public UpdateResponseDTO updateService(String userId, String planId, String requestId, UpdateRequestDTO updateDto) {
         log.info("Updating service for User ID: {}, Plan ID: {}, Request ID: {}", userId, planId, requestId);
         try {
-            // Run both independent DB lookups in parallel
+            // Run all independent DB lookups in parallel
             CompletableFuture<Object>[] results = asyncAdaptor.supplyAll(
                     2000L,
                     () -> serviceInstanceRepository.existsByRequestId(requestId),
-                    () -> serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(userId, planId)
+                    () -> serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(userId, planId),
+                    () -> userRepository.findByUserName(userId).orElse(null)
             );
 
             boolean requestExists = (boolean) results[0].get();
@@ -567,6 +597,8 @@ public class ServiceProvisioningService {
                             HttpStatus.NOT_FOUND
                     ));
 
+            UserEntity user = (UserEntity) results[2].get();
+
             if (serviceInstance.getStatus().equalsIgnoreCase(INACTIVE)) {
                 throw new AAAException(
                         LogMessages.ERROR_POLICY_CONFLICT,
@@ -579,7 +611,7 @@ public class ServiceProvisioningService {
                 return handleServiceInactivation(serviceInstance, userId, requestId);
             }
 
-            return performServiceUpdate(serviceInstance, updateDto, userId, requestId);
+            return performServiceUpdate(serviceInstance, updateDto, userId, requestId, user);
 
         } catch (AAAException ex) {
             throw ex;
@@ -616,7 +648,7 @@ public class ServiceProvisioningService {
     }
 
     private UpdateResponseDTO performServiceUpdate(ServiceInstance serviceInstance, UpdateRequestDTO updateDto,
-                                                   String userId, String requestId) {
+                                                   String userId, String requestId, UserEntity user) {
         serviceInstance.setRequestId(requestId);
 
         // Capture BEFORE anything is overwritten
@@ -632,7 +664,8 @@ public class ServiceProvisioningService {
             validateServiceDates(newStartDate, newEndDate, "Service Update");
         }
 
-        if (updateDto.getServiceStartDate() != null) serviceInstance.setServiceStartDate(updateDto.getServiceStartDate());
+        if (updateDto.getServiceStartDate() != null)
+            serviceInstance.setServiceStartDate(updateDto.getServiceStartDate());
         if (updateDto.getServiceEndDate() != null) serviceInstance.setExpiryDate(updateDto.getServiceEndDate());
         if (updateDto.getStatus() != null) serviceInstance.setStatus(mapStatus(updateDto.getStatus()));
 
@@ -648,6 +681,11 @@ public class ServiceProvisioningService {
 
         List<BucketInstance> updatedBuckets = manageMainBucketQuota(updateDto, bucketInstance);
         publishServiceUpdatedEvents(serviceInstance, updatedBuckets);
+        accountingCacheManagementService.syncBuckets(
+                updatedBuckets,
+                user != null ? user.getSessionTimeout() : String.valueOf(86400L),
+                user != null && user.getConcurrency() != null ? user.getConcurrency() : 5L,
+                serviceInstance);
 
         if (updateDto.getStatus() != null) {
             String newStatus = serviceInstance.getStatus();
@@ -710,8 +748,13 @@ public class ServiceProvisioningService {
 
     private void updateInitialQuotaOfMainBucket(UpdateRequestDTO updateDto, BucketInstance bucketInstance) {
         try {
+            if ( bucketInstance.getIsUnlimited())
+                throw new AAAException(LogMessages.ERROR_POLICY_CONFLICT,
+                        "Quota Cannot Be Updated For Unlimited Buckets", HttpStatus.BAD_REQUEST);
             Long newInitialBalance = updateDto.getQuota() + bucketInstance.getInitialBalance();
             bucketInstance.setInitialBalance(newInitialBalance);
+        } catch (AAAException ex) {
+            throw ex;
         } catch (Exception e) {
             throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR,
                     "Error Occurred During Initial Quota Update", HttpStatus.INTERNAL_SERVER_ERROR);
@@ -722,7 +765,6 @@ public class ServiceProvisioningService {
     public DeleteResponseDTO deleteService(String userId, String planId, String requestId) {
         log.info("Deleting service for User ID: {}, Plan ID: {}, Request ID: {}", userId, planId, requestId);
         try {
-            //   READ-ONLY: Fetch service for validation
             ServiceInstance serviceInstance = serviceInstanceRepository
                     .findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(userId, planId)
                     .orElseThrow(() -> new AAAException(
@@ -734,7 +776,10 @@ public class ServiceProvisioningService {
             List<BucketInstance> buckets = bucketInstanceRepository.findByServiceId(serviceInstance.getId());
 
             publishServiceDeletedEvents(serviceInstance, buckets);
-            coAManagementService.sendServiceDeleteCoARequest(userId, serviceInstance.getId());
+
+            // Fire CoA async — best-effort, never blocks the response
+            Long capturedServiceId = serviceInstance.getId();
+            CompletableFuture.runAsync(() -> sendServiceDeleteCoAAsync(userId, capturedServiceId));
 
             log.info("Successfully published service deletion events for Request ID: {}", requestId);
             return buildDeleteSuccessResponse(userId, planId);
@@ -766,23 +811,22 @@ public class ServiceProvisioningService {
             PublishResult result = kafkaEventPublisher.publishDBWriteEvent(mainEvent);
 
             if (result.isCompleteFailure()) {
+                log.error("Error occurred while publishing service into Kafka: {}",result.getError());
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        result.getError(),
+                        "Something went wrong",
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
 
-            serviceTTLManager.publishServiceTTL(
-                    service.getId(), service.getUsername(), service.getPlanId(), service.getExpiryDate()
-            );
+            serviceTTLManager.publishServiceTTL(service, buckets);
 
         } catch (AAAException ex) {
             throw ex;
         } catch (Exception e) {
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    e.getMessage(),
+                    "Something went wrong",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -802,23 +846,26 @@ public class ServiceProvisioningService {
             PublishResult result = kafkaEventPublisher.publishDBWriteEvent(mainEvent);
 
             if (result.isCompleteFailure()) {
+                log.error("Complete Error occurred while publishing payload into Kafka: {}", result.getError());
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        result.getError(),
+                        "Something went wrong",
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
 
-            serviceTTLManager.publishServiceTTL(
-                    service.getId(), service.getUsername(), service.getPlanId(), service.getExpiryDate()
-            );
+            // Only re-publish TTLs for buckets that were actually modified
+            if (!updatedBuckets.isEmpty()) {
+                serviceTTLManager.publishServiceTTL(service, updatedBuckets);
+            }
 
         } catch (AAAException ex) {
             throw ex;
         } catch (Exception e) {
+            log.error(LogMessages.ERROR_PUBLISHING_INTO_KAFKA, e.getMessage());
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    e.getMessage(),
+                    "Something went wrong",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -994,14 +1041,14 @@ public class ServiceProvisioningService {
             );
         }
 
-        if (startDate.toLocalDate().isBefore(now.toLocalDate())) {
-            log.error("{} - Service start date {} is in the past", context, startDate);
-            throw new AAAException(
-                    LogMessages.ERROR_BAD_REQUEST,
-                    "Service start date cannot be in the past. Must be today or a future date.",
-                    HttpStatus.BAD_REQUEST
-            );
-        }
+//        if (startDate.toLocalDate().isBefore(now.toLocalDate())) {
+//            log.error("{} - Service start date {} is in the past", context, startDate);
+//            throw new AAAException(
+//                    LogMessages.ERROR_BAD_REQUEST,
+//                    "Service start date cannot be in the past. Must be today or a future date.",
+//                    HttpStatus.BAD_REQUEST
+//            );
+//        }
 
         if (endDate != null) {
             if (endDate.isBefore(startDate) || endDate.isEqual(startDate)) {
@@ -1134,8 +1181,8 @@ public class ServiceProvisioningService {
         }
     }
 
-    private static void setBasicServiceInstanceData(ServiceInstance serviceInstance, Plan plan, UserEntity user,
-                                                    ActiveServiceRequestDTO request, Boolean isGroup) {
+    private void setBasicServiceInstanceData(ServiceInstance serviceInstance, Plan plan, UserEntity user,
+                                             ActiveServiceRequestDTO request, Boolean isGroup) {
         log.debug("Setting basic service instance data");
         serviceInstance.setPlanId(plan.getPlanId());
         serviceInstance.setPlanName(plan.getPlanName());
@@ -1149,13 +1196,63 @@ public class ServiceProvisioningService {
         }
 
         serviceInstance.setServiceStartDate(request.getServiceStartDate());
-        serviceInstance.setExpiryDate(request.getServiceEndDate() != null ?
-                request.getServiceEndDate() : setDefaultExpiry(request.getServiceStartDate()));
+        if (Boolean.FALSE.equals(plan.getRecurringFlag())) {
+            serviceInstance.setExpiryDate(generateExpiryDate(plan, request.getServiceStartDate(), user));
+        } else {
+            serviceInstance.setExpiryDate(request.getServiceEndDate() != null ?
+                    request.getServiceEndDate() : setDefaultExpiry(request.getServiceStartDate()));
+        }
+
         serviceInstance.setStatus(mapStatus(Integer.valueOf(request.getStatus())));
         serviceInstance.setIsGroup(isGroup);
         serviceInstance.setRequestId(request.getRequestId());
 
         log.debug("Basic service instance data set");
+    }
+
+    private LocalDateTime generateExpiryDate(Plan plan, LocalDateTime serviceStartDate, UserEntity user) {
+        String validityType = plan.getValidityType();
+        Integer validityPeriod = plan.getValidityPeriod();
+
+        if (validityType == null || validityPeriod == null) {
+            throw new AAAException(LogMessages.ERROR_VALIDATION_FAILED,
+                    "validityType and validityPeriod are mandatory for one-time packs", HttpStatus.BAD_REQUEST);
+        }
+
+        return switch (validityType) {
+            case "Minutes" -> serviceStartDate.plusMinutes(validityPeriod);
+            case "Hours" -> serviceStartDate.plusHours(validityPeriod);
+            case "Days" -> serviceStartDate.plusDays(validityPeriod);
+            case "BillCycle" -> calculateBillCycleExpiry(serviceStartDate, validityPeriod, user);
+            default -> throw new AAAException(LogMessages.ERROR_VALIDATION_FAILED,
+                    "Unknown validityType: " + validityType, HttpStatus.BAD_REQUEST);
+        };
+    }
+
+    private LocalDateTime calculateBillCycleExpiry(LocalDateTime serviceStartDate, int validityPeriod, UserEntity user) {
+        String billing = user.getBilling();
+        Integer cycleDate = "3".equals(billing) ? user.getCycleDate() : null;
+
+        LocalDateTime cycleStartDate;
+        if ("3".equals(billing)) {
+            cycleStartDate = getCycleStartDate(serviceStartDate, cycleDate);
+        } else if ("2".equals(billing)) {
+            cycleStartDate = serviceStartDate.withDayOfMonth(1).toLocalDate().atStartOfDay();
+        } else {
+            cycleStartDate = serviceStartDate.toLocalDate().atStartOfDay();
+        }
+
+        long validityDays = getNumberOfValidityDays("MONTHLY", billing, cycleStartDate);
+        cycleStartDate = adjustCycleStartForServiceStart(cycleStartDate, serviceStartDate, validityDays, "MONTHLY");
+        LocalDateTime cycleEnd = cycleStartDate.plusDays(validityDays - 1).toLocalDate().atTime(23, 59, 59);
+
+        for (int i = 1; i < validityPeriod; i++) {
+            LocalDateTime nextCycleStart = cycleEnd.plusSeconds(1);
+            validityDays = getNumberOfValidityDays("MONTHLY", billing, nextCycleStart);
+            cycleEnd = nextCycleStart.plusDays(validityDays - 1).toLocalDate().atTime(23, 59, 59);
+        }
+
+        return cycleEnd;
     }
 
     private static LocalDateTime setDefaultExpiry(@NotNull LocalDateTime serviceStartDate) {
@@ -1232,6 +1329,7 @@ public class ServiceProvisioningService {
                     "Invalid status: " + status, HttpStatus.BAD_REQUEST);
         };
     }
+
     /**
      * Sends a service status CoA request asynchronously.
      * Best-effort: failure is logged but never blocks the response.

@@ -19,7 +19,8 @@ import java.time.LocalDateTime;
                 @Index(name = "IDX_SI_PLAN_ID", columnList = "PLAN_ID"),
                 @Index(name = "IDX_SI_STATUS", columnList = "STATUS"),
                 @Index(name = "IDX_SI_USERNAME_PLANID", columnList = "USERNAME, PLAN_ID"),
-                @Index(name = "IDX_SI_USERNAME_STATUS", columnList = "USERNAME, STATUS")
+                @Index(name = "IDX_SI_USERNAME_STATUS", columnList = "USERNAME, STATUS"),
+                @Index(name = "IDX_SI_REQUEST_ID", columnList = "REQUEST_ID")
         })
 @Data
 @NoArgsConstructor

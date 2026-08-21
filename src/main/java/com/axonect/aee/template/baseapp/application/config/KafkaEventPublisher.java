@@ -1,23 +1,20 @@
 package com.axonect.aee.template.baseapp.application.config;
 
+import com.axonect.aee.template.baseapp.application.constants.LoggingAdviceConstants;
 import com.axonect.aee.template.baseapp.domain.events.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.header.internals.RecordHeader;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.requestreply.ReplyingKafkaTemplate;
 import org.springframework.kafka.requestreply.RequestReplyFuture;
-import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Service;
 
-import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -38,26 +35,18 @@ public class KafkaEventPublisher {
     private final ReplyingKafkaTemplate<String, Object, String> replyingKafkaTemplate;
 
     // ── Timeout / retry knobs ────────────────────────────────────────────────
-    @Value("${app.kafka.publish.timeout-ms:10000}")
+    @Value("${app.kafka.publish.timeout-ms:2000}")
     private long publishTimeoutMs;
-
-    // Broker-ACK wait is bounded by Kafka's own DELIVERY_TIMEOUT_MS (5 s).
-    // Keeping it shorter than publishTimeoutMs preserves the reply window.
-    private static final long BROKER_ACK_TIMEOUT_MS = 6000L;
 
     @Value("${app.kafka.publish.retry.enabled:true}")
     private boolean retryEnabled;
 
-    @Value("${app.kafka.publish.retry.max-attempts:3}")
+    @Value("${app.kafka.publish.retry.max-attempts:2}")
     private int maxRetryAttempts;
 
     // ── Topic names ──────────────────────────────────────────────────────────
     @Value("${app.kafka.topic.db-write}")
     private String dbWriteTopic;
-
-    @Autowired
-    @Qualifier("podReplyPartition")
-    private int podReplyPartition;
 
     // -----------------------------------------------------------------------
     // Core business ACK method
@@ -65,6 +54,7 @@ public class KafkaEventPublisher {
 
     public boolean publishWithBusinessAck(String topic, String key, Object payload, String eventType) {
         int attempt = 0;
+        long publishStart = System.currentTimeMillis();
 
         while (attempt < maxRetryAttempts) {
             attempt++;
@@ -73,21 +63,17 @@ public class KafkaEventPublisher {
             } catch (ConsumerReplyException e) {
                 throw e;
             } catch (Exception e) {
-                handleRetryOrThrow(e, attempt, eventType, key);
+                handleRetryOrThrow(e, attempt, eventType, key, System.currentTimeMillis() - publishStart);
             }
         }
 
-        log.error("FINAL NACK for {} event (key: '{}') after {} attempts", eventType, key, attempt);
+        log.error(LoggingAdviceConstants.UP_KAFKA, System.currentTimeMillis() - publishStart, "PUBLISH_FINAL_NACK", eventType + "|KEY:" + key);
         return false;
     }
 
     private boolean sendAndAwaitReply(String topic, String key, Object payload, String eventType) throws Exception {
+        long kafkaStart = System.currentTimeMillis();
         ProducerRecord<String, Object> producerRecord = new ProducerRecord<>(topic, key, payload);
-
-
-        producerRecord.headers().add(new RecordHeader(
-                KafkaHeaders.REPLY_PARTITION,
-                ByteBuffer.allocate(4).putInt(podReplyPartition).array()));
 
         RequestReplyFuture<String, Object, String> future =
                 replyingKafkaTemplate.sendAndReceive(producerRecord, Duration.ofMillis(publishTimeoutMs));
@@ -95,12 +81,13 @@ public class KafkaEventPublisher {
         logBrokerAck(future, eventType, key);
 
         ConsumerRecord<String, String> reply = future.get(publishTimeoutMs, TimeUnit.MILLISECONDS);
+        log.info(LoggingAdviceConstants.UP_KAFKA, System.currentTimeMillis() - kafkaStart, "PUBLISH_ACK", eventType + "|KEY:" + key);
         return evaluateConsumerReply(reply.value(), eventType, key);
     }
 
     private void logBrokerAck(RequestReplyFuture<String, Object, String> future,
                               String eventType, String key) throws Exception {
-        SendResult<String, Object> sendResult = future.getSendFuture().get(BROKER_ACK_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        SendResult<String, Object> sendResult = future.getSendFuture().get(publishTimeoutMs, TimeUnit.MILLISECONDS);
         log.debug("Broker ACK received for {} event (key: '{}') – Partition: {}, Offset: {}",
                 eventType, key,
                 sendResult.getRecordMetadata().partition(),
@@ -126,12 +113,10 @@ public class KafkaEventPublisher {
         return result;
     }
 
-    private void handleRetryOrThrow(Exception e, int attempt, String eventType, String key) {
-        log.error("Attempt {}/{} failed for {} event (key: '{}'): {}",
-                attempt, maxRetryAttempts, eventType, key, e.getMessage());
+    private void handleRetryOrThrow(Exception e, int attempt, String eventType, String key, long elapsedMs) {
+        log.error(LoggingAdviceConstants.UP_KAFKA, elapsedMs, "PUBLISH_FAIL_ATTEMPT_" + attempt, eventType + "|KEY:" + key + "|ERROR:" + e.getMessage());
 
         if (!retryEnabled || attempt >= maxRetryAttempts) {
-            log.error("Max retry attempts reached for {} event (key: '{}') – giving up", eventType, key);
             throw new KafkaException(
                     String.format("Publish failed for %s event (key: '%s') after %d attempts", eventType, key, attempt), e);
         }
@@ -185,13 +170,5 @@ public class KafkaEventPublisher {
                 dbWriteEvent.getEventType()
         );
         return PublishResult.builder().Success(success).build();
-    }
-
-    // -----------------------------------------------------------------------
-    // Utility
-    // -----------------------------------------------------------------------
-
-    public String getCurrentTimestamp() {
-        return LocalDateTime.now().format(DateTimeFormatter.ofPattern(TIMESTAMP_PATTERN));
     }
 }

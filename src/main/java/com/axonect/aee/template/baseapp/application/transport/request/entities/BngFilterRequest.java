@@ -12,7 +12,7 @@ import lombok.NoArgsConstructor;
 public class BngFilterRequest {
     private String bngId;
     private String bngName;
-    private String bngIp;
+    private String nasIpAddress;
     private String status;
 
     // Pagination parameters
@@ -22,4 +22,5 @@ public class BngFilterRequest {
     // Sorting parameters
     private String sortBy = "createdDate";
     private String sortDirection = "DESC";
+
 }

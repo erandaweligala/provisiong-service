@@ -21,6 +21,7 @@ public interface UserRepository extends JpaRepository<UserEntity, String>, JpaSp
     Page<UserEntity> findByStatus(UserStatus userStatus, Pageable pageable);
     Page<UserEntity> findByGroupId(String groupId, Pageable pageable);
     Optional<UserEntity> findFirstByGroupId(String groupId);
+    boolean existsByGroupIdAndStatus(String groupId, UserStatus userStatus);
     Page<UserEntity> findByGroupIdAndStatus(String groupId, UserStatus userStatus, Pageable pageable);
     boolean existsByGroupId(String groupId);
     boolean existsByUserId(String userId);
@@ -57,4 +58,6 @@ public interface UserRepository extends JpaRepository<UserEntity, String>, JpaSp
     Optional<Object[]> findByUserIdWithTemplate(@Param("userId") String userId);
 
     boolean existsByTemplateId(Long templateId);
+    @Query("SELECT u.status, COUNT(u) FROM UserEntity u GROUP BY u.status")
+    List<Object[]> countByStatus();
 }

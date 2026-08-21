@@ -42,9 +42,9 @@ public class EventMapper {
                 .templateName(user.getTemplateName())
                 .status(user.getStatus() != null ? user.getStatus().name() : null)
                 .subscription(user.getSubscription() != null ? user.getSubscription().name() : null)
-                .contactName(user.getContactName())
+                /*.contactName(user.getContactName())
                 .contactEmail(user.getContactEmail())
-                .contactNumber(user.getContactNumber())
+                .contactNumber(user.getContactNumber())*/
                 .concurrency(user.getConcurrency())
                 .billing(user.getBilling())
                 .cycleDate(user.getCycleDate())
@@ -90,9 +90,9 @@ public class EventMapper {
         columns.put("TEMPLATE_ID", user.getTemplateId());
         columns.put(STATUS, user.getStatus() != null ? user.getStatus().name() : null);
         columns.put("SUBSCRIPTION", user.getSubscription() != null ? user.getSubscription().name() : null);
-        columns.put("CONTACT_NAME", user.getContactName());
+        /*columns.put("CONTACT_NAME", user.getContactName());
         columns.put("CONTACT_EMAIL", user.getContactEmail());
-        columns.put("CONTACT_NUMBER", user.getContactNumber());
+        columns.put("CONTACT_NUMBER", user.getContactNumber());*/
         columns.put("CONCURRENCY", user.getConcurrency());
         columns.put("BILLING", user.getBilling());
         columns.put("CYCLE_DATE", user.getCycleDate());
@@ -494,6 +494,14 @@ public class EventMapper {
         columns.put("RESULT_CODE", actionLog.getResultCode());
         columns.put("HTTP_STATUS", actionLog.getHttpStatus());
         columns.put("DESCRIPTION", actionLog.getDescription());
+        columns.put("CHANNEL", actionLog.getChannel());
+        columns.put("RESPONSE_TIME", actionLog.getResponseTime());
+        columns.put("APP", actionLog.getApplication());
+        columns.put("OPCO", actionLog.getOpco());
+        columns.put("REQUEST_START_TIME" , actionLog.getRequestStartTime() != null ?
+                actionLog.getRequestStartTime().format(FORMATTER) : null);
+        columns.put("REQUEST_END_TIME" , actionLog.getRequestEndTime() != null ?
+                actionLog.getRequestEndTime().format(FORMATTER) : null);
         return columns;
     }
 

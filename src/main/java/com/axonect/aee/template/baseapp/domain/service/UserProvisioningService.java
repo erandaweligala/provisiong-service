@@ -2,6 +2,7 @@ package com.axonect.aee.template.baseapp.domain.service;
 
 import com.axonect.aee.template.baseapp.application.config.KafkaEventPublisher;
 import com.axonect.aee.template.baseapp.application.config.NotificationPublisher;
+import com.axonect.aee.template.baseapp.application.constants.LoggingAdviceConstants;
 import com.axonect.aee.template.baseapp.application.repository.*;
 import com.axonect.aee.template.baseapp.application.transport.request.entities.CreateUserRequest;
 import com.axonect.aee.template.baseapp.application.transport.request.entities.UpdateUserRequest;
@@ -17,7 +18,10 @@ import com.axonect.aee.template.baseapp.domain.events.DBWriteRequestGeneric;
 import com.axonect.aee.template.baseapp.domain.events.EventMapper;
 import com.axonect.aee.template.baseapp.domain.events.PublishResult;
 import com.axonect.aee.template.baseapp.domain.exception.AAAException;
+import com.axonect.aee.template.baseapp.domain.exception.StackTraceTracker;
 import com.axonect.aee.template.baseapp.domain.util.LogMessages;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.SneakyThrows;
@@ -26,6 +30,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -122,11 +127,8 @@ public class UserProvisioningService {
 
     @Transactional
     public CreateUserResponse createUser(CreateUserRequest request) {
-        MDC.put(USERNAME, request.getUserName());
         long methodStart = System.currentTimeMillis();
-
         try {
-            log.info(LogMessages.USER_CREATE_REQUEST, request.getUserName());
 
             // 1. Pure-logic validations (fast, fail-fast for invalid requests — no DB I/O)
             validateEncryptionMethod(request);
@@ -148,50 +150,40 @@ public class UserProvisioningService {
             // 3. Run ALL DB reads concurrently: username, requestId, MAC, group billing, template
             ValidationResult validation = parallelDbValidate(request, groupId, normalizedMacs);
 
-            //     BUILD user entity (don't save to DB)
+            // BUILD user entity (don't save to DB)
             UserEntity user = mapToEntity(request, groupId, validation.templateId());
 
-            //     Generate userId manually (since @PrePersist won't run)
+            // Generate userId manually (since @PrePersist won't run)
             user.setUserId(generateUserId());
             user.setCreatedDate(LocalDateTime.now());
 
-            //     Set MAC addresses in transient field
+            // Set MAC addresses in transient field
             if (request.getMacAddress() != null && !request.getMacAddress().isBlank()) {
                 user.setMacAddress(request.getMacAddress());
             }
 
-            //     Set template name from cached parallel-fetch result (no second DB round-trip)
+            // Set template name from cached parallel-fetch result (no second DB round-trip)
             user.setTemplateName(validation.templateName());
 
-            //  PUBLISH TO KAFKA (blocking — must succeed)
+            // PUBLISH TO KAFKA (blocking — must succeed)
+            long kafkaStart = System.currentTimeMillis();
             publishUserCreatedEvents(user);
+            log.info(LoggingAdviceConstants.UP_KAFKA, System.currentTimeMillis() - kafkaStart, "PUBLISH", "USER_CREATION|" + user.getUserName());
             // Notification is best-effort, run async
             CompletableFuture.runAsync(() -> sendUserCreationNotification(user));
-
-
-            MDC.put(USERID, user.getUserId());
             log.info(LogMessages.USER_CREATED, user.getUserName(), user.getUserId());
-
+            log.info(LoggingAdviceConstants.SERVICE_TERMINATION, System.currentTimeMillis() - methodStart, "User created: " + user.getUserName());
             return mapToCreateUserResponse(user);
-
         } catch (AAAException ex) {
-            log.error("Validation error received: {}", ex.getMessage());
+            log.warn(LoggingAdviceConstants.SERVICE_TERMINATION,System.currentTimeMillis()-methodStart,ex.getMessage());
             throw ex;
-        } finally {
-            long totalDuration = System.currentTimeMillis() - methodStart;
-            log.info("Total execution time for createUser('{}') = {} ms",
-                    request.getUserName(), totalDuration);
-            MDC.clear();
+        }catch (Exception ex){
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR,LogMessages.INTERNAL_SERVER_ERROR,HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
     // ADD: Manual userId generation (since @PrePersist won't run)
-    /**
-     * Generates a non-cryptographic user reference ID.
-     * <p>
-     * This identifier is for business/display purposes only
-     * and is not used for authentication or authorization.
-     */
+
     @SuppressWarnings("java:S2245")
     private String generateUserId() {
         long timestamp = System.currentTimeMillis();
@@ -200,89 +192,81 @@ public class UserProvisioningService {
     }
 
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // Parallel DB validation (replaces sequential asyncValidate +
-    // validateGroupBillingConsistency + getTemplateIdOrDefault)
-    // ──────────────────────────────────────────────────────────────────────────
-
-    /** Holds the results needed from the parallel DB validation phase. */
     private record ValidationResult(Long templateId, String templateName) {}
 
-    /**
-     * Runs all DB reads for createUser concurrently, then validates results.
-     * Reduces latency by eliminating sequential round-trips for:
-     *   existsByUserName, existsByRequestId, MAC lookup,
-     *   group-billing reference user, and template fetch.
-     */
+
     @SneakyThrows
     private ValidationResult parallelDbValidate(CreateUserRequest request,
                                                 String groupId,
                                                 List<String> normalizedMacs) {
+        long startTime = System.currentTimeMillis();
 
-        boolean needsGroupCheck = StringUtils.hasText(request.getGroupId())
-                && !"1".equals(request.getGroupId());
-        boolean templateIdProvided = request.getTemplateId() != null;
+        try{
+            boolean needsGroupCheck = StringUtils.hasText(request.getGroupId())
+                    && !"1".equals(request.getGroupId());
+            boolean templateIdProvided = request.getTemplateId() != null;
 
-        CompletableFuture<Object>[] futures = asyncAdaptor.supplyAll(
-                2000L,
-                // [0] duplicate username
-                () -> userRepository.existsByUserName(request.getUserName()),
-                // [1] duplicate requestId
-                () -> userRepository.existsByRequestId(request.getRequestId()),
-                // [2] MAC existence in DB
-                () -> normalizedMacs.isEmpty()
-                        ? Collections.<UserToMac>emptyList()
-                        : userToMacRepository.findByMacAddressIn(normalizedMacs),
-                // [3] group billing reference user (skipped for default group)
-                () -> needsGroupCheck
-                        ? userRepository.findFirstByGroupId(request.getGroupId())
-                        : Optional.<UserEntity>empty(),
-                // [4] template fetch (by provided ID or default)
-                () -> templateIdProvided
-                        ? superTemplateRepository.findById(request.getTemplateId())
-                                .orElseThrow(() -> new AAAException(
-                                        LogMessages.ERROR_NOT_FOUND,
-                                        "Template with ID " + request.getTemplateId() + " not found",
-                                        HttpStatus.NOT_FOUND))
-                        : superTemplateRepository.findByIsDefault(true)
-                                .orElseThrow(() -> new AAAException(
-                                        LogMessages.ERROR_NOT_FOUND,
-                                        "No default template configured in the system",
-                                        HttpStatus.NOT_FOUND))
-        );
+            CompletableFuture<Object>[] futures = asyncAdaptor.supplyAll(
+                    2000L,
+                    // [0] duplicate username
+                    () -> userRepository.existsByUserName(request.getUserName()),
+                    // [1] duplicate requestId
+                    () -> userRepository.existsByRequestId(request.getRequestId()),
+                    // [2] MAC existence in DB
+                    () -> normalizedMacs.isEmpty()
+                            ? Collections.<UserToMac>emptyList()
+                            : userToMacRepository.findByMacAddressIn(normalizedMacs),
+                    // [3] group billing reference user (skipped for default group)
+                    () -> needsGroupCheck
+                            ? userRepository.findFirstByGroupId(request.getGroupId())
+                            : Optional.<UserEntity>empty(),
+                    // [4] template fetch (by provided ID or default)
+                    () -> templateIdProvided
+                            ? superTemplateRepository.findById(request.getTemplateId())
+                              .orElseThrow(() -> new AAAException(
+                                      LogMessages.ERROR_NOT_FOUND,
+                                      "Template with ID " + request.getTemplateId() + " not found",
+                                      HttpStatus.NOT_FOUND))
+                            : superTemplateRepository.findByIsDefault(true)
+                              .orElseThrow(() -> new AAAException(
+                                      LogMessages.ERROR_NOT_FOUND,
+                                      "No default template configured in the system",
+                                      HttpStatus.NOT_FOUND))
+            );
 
-        // All futures are already completed — .get() / .join() will not block
-        if ((Boolean) futures[0].get()) {
-            log.warn(LogMessages.DUPLICATE_USER, request.getUserName());
-            throw new AAAException(LogMessages.ERROR_DUPLICATE_USER,
-                    "User '" + request.getUserName() + ALREADY_EXISTS, HttpStatus.CONFLICT);
-        }
+            log.info(LoggingAdviceConstants.UP_DB,System.currentTimeMillis()-startTime,"SELECT",futures.length);
+            if (Boolean.TRUE.equals((Boolean) futures[0].get())) {
+                throw new AAAException(LogMessages.ERROR_DUPLICATE_USER,
+                        "User '" + request.getUserName() + ALREADY_EXISTS, HttpStatus.CONFLICT);
+            }
 
-        if ((Boolean) futures[1].get()) {
-            log.warn(LogMessages.DUPLICATE_REQUEST_ID, request.getRequestId());
-            throw new AAAException(LogMessages.ERROR_DUPLICATE_REQ,
-                    "Request ID '" + request.getRequestId() + ALREADY_EXISTS, HttpStatus.CONFLICT);
-        }
+            if (Boolean.TRUE.equals((Boolean) futures[1].get())) {
+                throw new AAAException(LogMessages.ERROR_DUPLICATE_REQ,
+                        "Request ID '" + request.getRequestId() + ALREADY_EXISTS, HttpStatus.CONFLICT);
+            }
 
-        @SuppressWarnings("unchecked")
-        List<UserToMac> existingMacs = (List<UserToMac>) futures[2].get();
-        validateMacsDbResult(request.getMacAddress(), normalizedMacs, existingMacs);
-
-        if (needsGroupCheck) {
             @SuppressWarnings("unchecked")
-            Optional<UserEntity> groupUser = (Optional<UserEntity>) futures[3].get();
-            validateGroupBillingFromResult(groupUser, request);
-        }
+            List<UserToMac> existingMacs = (List<UserToMac>) futures[2].get();
+            validateMacsDbResult(request.getMacAddress(), normalizedMacs, existingMacs);
 
-        SuperTemplate template = (SuperTemplate) futures[4].get();
-        return new ValidationResult(template.getId(), template.getTemplateName());
+            if (needsGroupCheck) {
+                @SuppressWarnings("unchecked")
+                Optional<UserEntity> groupUser = (Optional<UserEntity>) futures[3].get();
+                validateGroupBillingFromResult(groupUser, request);
+            }
+            SuperTemplate template = (SuperTemplate) futures[4].get();
+
+            return new ValidationResult(template.getId(), template.getTemplateName());
+
+        }catch (AAAException ex){
+            log.warn(LoggingAdviceConstants.SERVICE_TERMINATION,System.currentTimeMillis()-startTime,ex.getMessage());
+            throw ex;
+        }catch (Exception ex){
+            log.error(LoggingAdviceConstants.EXCEPTION_STACK_TRACE,System.currentTimeMillis()-startTime,ex.getMessage(), StackTraceTracker.displayStackStraceArray(ex.getStackTrace()));
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR,LogMessages.INTERNAL_SERVER_ERROR,HttpStatus.INTERNAL_SERVER_ERROR);
+        }
     }
 
-    /**
-     * Parses and format-validates MAC addresses from the request.
-     * Deduplication uses O(1) HashSet.add(), replacing the previous O(n) stream scan.
-     * Returns normalized MACs for the DB existence check.
-     */
     private List<String> parseMacsForCheck(String macAddress) {
         if (macAddress == null || macAddress.isBlank()) {
             return Collections.emptyList();
@@ -303,10 +287,6 @@ public class UserProvisioningService {
         return normalized;
     }
 
-    /**
-     * Validates MAC addresses against DB results using an O(n) HashSet lookup,
-     * replacing the previous O(n×m) nested loop.
-     */
     private void validateMacsDbResult(String originalMacStr,
                                       List<String> normalizedMacs,
                                       List<UserToMac> existingMacs) {
@@ -343,9 +323,9 @@ public class UserProvisioningService {
             log.error("Cycle date mismatch for groupId: {}. Expected: {}, Provided: {}",
                     request.getGroupId(), ref.getCycleDate(), request.getCycleDate());
             throw new AAAException(LogMessages.USER_VALIDATION_ERROR_CODE,
-                    String.format("Cycle date mismatch for group %s. All users in the same group must "
+                    String.format("All users in the same group must "
                                     + "have the same cycle date. Expected: %s, Provided: %s",
-                            request.getGroupId(), ref.getCycleDate(), request.getCycleDate()),
+                             ref.getCycleDate(), request.getCycleDate()),
                     HttpStatus.BAD_REQUEST);
         }
     }
@@ -473,8 +453,7 @@ public class UserProvisioningService {
         long methodStart = System.currentTimeMillis();
 
         try {
-            log.info("Retrieving user with username: {}", userName);
-
+            long dbStart = System.currentTimeMillis();
             UserEntity user = userRepository.findByUserName(userName)
                     .orElseThrow(() -> new AAAException(
                             LogMessages.ERROR_NOT_FOUND,
@@ -499,16 +478,18 @@ public class UserProvisioningService {
                         .collect(Collectors.joining(", ")));
             }
             user.setTemplateName(templateFuture.join());
+            log.info(LoggingAdviceConstants.UP_DB, System.currentTimeMillis() - dbStart, "SELECT", 1);
 
             MDC.put(USERID, user.getUserId());
-            log.info("User '{}' successfully retrieved", userName);
 
             return mapToGetResponse(user);
 
-        } finally {
-            long totalDuration = System.currentTimeMillis() - methodStart;
-            log.info("Total execution time for getUserByUserName('{}') = {} ms", userName, totalDuration);
-            MDC.clear();
+        } catch (AAAException e) {
+            log.warn(LoggingAdviceConstants.SERVICE_TERMINATION, System.currentTimeMillis() - methodStart, "User retrieved: " + userName);
+            throw e;
+        } catch (Exception e) {
+            log.error(LoggingAdviceConstants.EXCEPTION_STACK_TRACE,System.currentTimeMillis()-methodStart,e.getMessage(),StackTraceTracker.displayStackStraceArray(e.getStackTrace()));
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR,LogMessages.INTERNAL_SERVER_ERROR,HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -522,7 +503,7 @@ public class UserProvisioningService {
 
         try {
             int pageIndex = Math.max(page - 1, 0);
-            Pageable pageable = PageRequest.of(pageIndex, pageSize);
+            Pageable pageable = PageRequest.of(pageIndex, pageSize, Sort.by(Sort.Direction.DESC, "createdDate"));
 
             Specification<UserEntity> spec = Specification.where(null);
 
@@ -548,8 +529,7 @@ public class UserProvisioningService {
             // --- DB Query Timing ---
             long dbStart = System.currentTimeMillis();
             Page<UserEntity> userPage = userRepository.findAll(spec, pageable);
-            long dbDuration = System.currentTimeMillis() - dbStart;
-            log.info("DB query for getAllUsers completed in {} ms", dbDuration);
+            log.info(LoggingAdviceConstants.UP_DB, System.currentTimeMillis() - dbStart, "SELECT", userPage.getTotalElements());
 
             // --- Batch fetch template names (single query instead of N+1) ---
             List<Long> templateIds = userPage.getContent().stream()
@@ -559,9 +539,11 @@ public class UserProvisioningService {
                     .toList();
 
             if (!templateIds.isEmpty()) {
+                long templateDbStart = System.currentTimeMillis();
                 Map<Long, String> templateNameMap = superTemplateRepository.findByIdIn(templateIds)
                         .stream()
                         .collect(Collectors.toMap(SuperTemplate::getId, SuperTemplate::getTemplateName));
+                log.info(LoggingAdviceConstants.UP_DB, System.currentTimeMillis() - templateDbStart, "SELECT_TEMPLATES", templateIds.size());
 
                 for (UserEntity user : userPage.getContent()) {
                     if (user.getTemplateId() != null) {
@@ -576,20 +558,19 @@ public class UserProvisioningService {
                     .toList();
             Map<String, String> macMap = new HashMap<>();
             if (!userNames.isEmpty()) {
+                long macDbStart = System.currentTimeMillis();
                 userToMacRepository.findByUserNameIn(userNames).stream()
                         .collect(Collectors.groupingBy(UserToMac::getUserName))
                         .forEach((name, macs) -> macMap.put(name,
                                 macs.stream().map(UserToMac::getOriginalMacAddress)
                                         .collect(Collectors.joining(", "))));
+                log.info(LoggingAdviceConstants.UP_DB, System.currentTimeMillis() - macDbStart, "SELECT_MACS", userNames.size());
             }
 
-            // --- Mapping Timing ---
-            long mapStart = System.currentTimeMillis();
+            // --- Mapping ---
             List<UserResponse> users = userPage.getContent().stream()
                     .map(user -> mapToResponse(user, macMap.get(user.getUserName())))
                     .toList();
-            long mapDuration = System.currentTimeMillis() - mapStart;
-            log.info("Mapping UserEntity → UserResponse for {} records took {} ms", users.size(), mapDuration);
 
             return PagedUserResponse.builder()
                     .users(users)
@@ -599,8 +580,7 @@ public class UserProvisioningService {
                     .build();
 
         } finally {
-            long totalDuration = System.currentTimeMillis() - methodStart;
-            log.info("Total execution time for getAllUsers = {} ms", totalDuration);
+            log.info(LoggingAdviceConstants.SERVICE_TERMINATION, System.currentTimeMillis() - methodStart, "getAllUsers completed");
         }
     }
 
@@ -639,8 +619,8 @@ public class UserProvisioningService {
                     request.getGroupId(), referenceUser.getBilling(), request.getBilling());
             throw new AAAException(
                     LogMessages.USER_VALIDATION_ERROR_CODE,
-                    String.format("Billing value mismatch for group %s. All users in the same group must have the same billing type. Expected: %s, Provided: %s",
-                            request.getGroupId(), referenceUser.getBilling(), request.getBilling()),
+                    String.format("All users in the same group must have the same billing type. Expected: %s, Provided: %s",
+                            referenceUser.getBilling(), request.getBilling()),
                     HttpStatus.BAD_REQUEST
             );
         }
@@ -652,8 +632,8 @@ public class UserProvisioningService {
                     request.getGroupId(), referenceUser.getCycleDate(), request.getCycleDate());
             throw new AAAException(
                     LogMessages.USER_VALIDATION_ERROR_CODE,
-                    String.format("Cycle date mismatch for group %s. All users in the same group must have the same cycle date. Expected: %s, Provided: %s",
-                            request.getGroupId(), referenceUser.getCycleDate(), request.getCycleDate()),
+                    String.format("All users in the same group must have the same cycle date. Expected: %s, Provided: %s",
+                            referenceUser.getCycleDate(), request.getCycleDate()),
                     HttpStatus.BAD_REQUEST
             );
         }
@@ -818,16 +798,20 @@ public class UserProvisioningService {
                 userNameList.add(user.getGroupId());
             }
 
+            long dbStart = System.currentTimeMillis();
             List<BucketFlatProjection> bucketSummaryList = bucketInstanceRepository.findFlatBucketDetailsByUsernames(userNameList);
+            log.info(LoggingAdviceConstants.UP_DB, System.currentTimeMillis() - dbStart, "SELECT", bucketSummaryList.size());
+
             List<Plan> planSummaryList = mapPlanSummaryList(bucketSummaryList);
             response.setPlans(planSummaryList);
 
-            log.info(LogMessages.SERVICE_TERMINATION, System.currentTimeMillis() - start, "User Service Summary Retrieved Successfully");
+            log.info(LoggingAdviceConstants.SERVICE_TERMINATION, System.currentTimeMillis() - start, "User Service Summary Retrieved Successfully");
             return response;
         } catch (AAAException e) {
             throw e;
         } catch (Exception ex) {
-            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, ex.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
+            log.error(LoggingAdviceConstants.EXCEPTION_STACK_TRACE, System.currentTimeMillis() - start, ex.getMessage(), StackTraceTracker.displayStackStraceArray(ex.getStackTrace()));
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, LogMessages.ERROR_INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -883,19 +867,17 @@ public class UserProvisioningService {
 
     @Transactional
     public UpdateUserResponse updateUser(String userName, UpdateUserRequest request) {
-        MDC.put(USERNAME, userName);
         long methodStart = System.currentTimeMillis();
-
         try {
-            log.info(LogMessages.USER_UPDATE_REQUEST, userName);
-
             // Fetch user for validation
+            long dbStart = System.currentTimeMillis();
             UserEntity user = userRepository.findByUserName(userName)
                     .orElseThrow(() -> new AAAException(
                             LogMessages.ERROR_NOT_FOUND,
                             String.format(USER_NOT_FOUND, userName),
                             HttpStatus.NOT_FOUND
                     ));
+            log.info(LoggingAdviceConstants.UP_DB, System.currentTimeMillis() - dbStart, "SELECT", 1);
 
             MDC.put(USERID, user.getUserId());
 
@@ -929,7 +911,9 @@ public class UserProvisioningService {
                             .map(SuperTemplate::getTemplateName).orElse(null))
                     : CompletableFuture.completedFuture(null);
 
+            long kafkaStart = System.currentTimeMillis();
             publishUserUpdatedEvents(user);
+            log.info(LoggingAdviceConstants.UP_KAFKA, System.currentTimeMillis() - kafkaStart, "PUBLISH", "USER_UPDATE|" + userName);
             CompletableFuture.runAsync(() -> sendUserUpdateNotification(user));
 
             user.setTemplateName(templateNameFuture.join());
@@ -937,10 +921,13 @@ public class UserProvisioningService {
             log.info(LogMessages.USER_UPDATED, userName);
             return response;
 
-        } finally {
-            long totalDuration = System.currentTimeMillis() - methodStart;
-            log.info("Total execution time for updateUser('{}') = {} ms", userName, totalDuration);
-            MDC.clear();
+        } catch (AAAException e) {
+            log.warn(LoggingAdviceConstants.SERVICE_TERMINATION, System.currentTimeMillis() - methodStart, e.getMessage());
+            throw e;
+        }
+        catch (Exception ex) {
+            log.error(LoggingAdviceConstants.EXCEPTION_STACK_TRACE, System.currentTimeMillis() - methodStart, ex.getMessage(), StackTraceTracker.displayStackStraceArray(ex.getStackTrace()));
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, LogMessages.ERROR_INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -1065,30 +1052,27 @@ public class UserProvisioningService {
         long methodStart = System.currentTimeMillis();
 
         try {
-            log.info("Starting cascade delete for user: {}", userName);
-
             //  Fetch user for validation
+            long dbStart = System.currentTimeMillis();
             UserEntity user = userRepository.findByUserName(userName)
                     .orElseThrow(() -> new AAAException(
                             LogMessages.ERROR_NOT_FOUND,
                             "User '" + userName + "' not found",
                             HttpStatus.NOT_FOUND
                     ));
+            log.info(LoggingAdviceConstants.UP_DB, System.currentTimeMillis() - dbStart, "SELECT", 1);
 
             MDC.put(USERID, user.getUserId());
 
             // Enrich with MAC addresses for Kafka event
             enrichUserWithMacAddresses(user);
 
-            // CASCADE DELETE: Service Instances & Bucket Instances
+            // CASCADE DELETE: Service Instances & Bucket Instances, then user
+            long kafkaStart = System.currentTimeMillis();
             publishCascadeDeleteEvents(userName);
-
-            // PUBLISH USER DELETE EVENT TO KAFKA
             publishUserDeletedEvents(user);
+            log.info(LoggingAdviceConstants.UP_KAFKA, System.currentTimeMillis() - kafkaStart, "PUBLISH", "USER_DELETION|" + userName);
             CompletableFuture.runAsync(() -> sendUserDeletionNotification(user));
-
-
-            log.info("User '{}' and all related data delete events published successfully", userName);
 
             return DeleteUserResponse.builder()
                     .requestId(requestId)
@@ -1097,12 +1081,12 @@ public class UserProvisioningService {
                     .build();
 
         } catch (AAAException ex) {
-            log.error("Error during cascade delete for user '{}': {}", userName, ex.getMessage());
+            log.warn(LoggingAdviceConstants.SERVICE_TERMINATION, System.currentTimeMillis() - methodStart, ex.getMessage());
             throw ex;
-        } finally {
-            long totalDuration = System.currentTimeMillis() - methodStart;
-            log.info("Total execution time for cascade deleteUser('{}') = {} ms", userName, totalDuration);
-            MDC.clear();
+        }
+        catch (Exception ex) {
+            log.error(LoggingAdviceConstants.EXCEPTION_STACK_TRACE, System.currentTimeMillis() - methodStart, ex.getMessage(), StackTraceTracker.displayStackStraceArray(ex.getStackTrace()));
+            throw new AAAException(LogMessages.ERROR_INTERNAL_ERROR, LogMessages.ERROR_INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
     /**
@@ -1285,7 +1269,7 @@ public class UserProvisioningService {
             if (result.isCompleteFailure()) {
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        result.getError(),
+                        "Something went wrong",
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
             }
@@ -1298,7 +1282,7 @@ public class UserProvisioningService {
             log.error("Failed to publish user created events for '{}'", user.getUserName(), e);
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    e.getMessage(),
+                    "Something went wrong",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -1325,7 +1309,7 @@ public class UserProvisioningService {
             log.error("Failed to publish user updated events for '{}'", user.getUserName(), e);
             throw new AAAException(
                     LogMessages.ERROR_INTERNAL_ERROR,
-                    e.getMessage(),
+                    "Something went wrong",
                     HttpStatus.INTERNAL_SERVER_ERROR
             );
         }
@@ -1343,7 +1327,7 @@ public class UserProvisioningService {
             log.error("Failed to publish user deleted events for '{}'", user.getUserName(), e);
                 throw new AAAException(
                         LogMessages.ERROR_INTERNAL_ERROR,
-                        e.getMessage(),
+                        "Something went wrong",
                         HttpStatus.INTERNAL_SERVER_ERROR
                 );
         }
@@ -1443,22 +1427,34 @@ public class UserProvisioningService {
             );
         }
 
-        if (PPPOE.equalsIgnoreCase(nasPortType) &&
+        /*if (PPPOE.equalsIgnoreCase(nasPortType) &&
                 (request.getPassword() == null || request.getPassword().isBlank())) {
             throw new AAAException(
                     LogMessages.ERROR_VALIDATION_FAILED,
                     LogMessages.MSG_PASSWORD_REQUIRED_PPPOE,
                     HttpStatus.UNPROCESSABLE_ENTITY
             );
-        }
+        }*/
 
-        if (IPOE.equalsIgnoreCase(nasPortType) &&
+        /*if (IPOE.equalsIgnoreCase(nasPortType) &&
                 (request.getMacAddress() == null || request.getMacAddress().isBlank())) {
             throw new AAAException(
                     LogMessages.ERROR_VALIDATION_FAILED,
                     LogMessages.MSG_MAC_REQUIRED_IPOE,
                     HttpStatus.UNPROCESSABLE_ENTITY
             );
+        }*/
+        if (IPOE.equalsIgnoreCase(nasPortType)) {
+            boolean hasPassword = request.getPassword() != null && !request.getPassword().isBlank();
+            boolean hasMac = request.getMacAddress() != null && !request.getMacAddress().isBlank();
+
+            if (!hasPassword && !hasMac) {
+                throw new AAAException(
+                        LogMessages.ERROR_VALIDATION_FAILED,
+                        LogMessages.MSG_PASSWORD_OR_MAC_REQUIRED_IPOE,
+                        HttpStatus.UNPROCESSABLE_ENTITY
+                );
+            }
         }
 
         if (IPOE.equalsIgnoreCase(nasPortType) &&
@@ -1548,7 +1544,13 @@ public class UserProvisioningService {
     private void validateEncryptionMethod(CreateUserRequest request) {
         String password = request.getPassword();
         Integer encryptionMethod = request.getEncryptionMethod();
-
+        if (password != null && password.isBlank()) {
+            throw new AAAException(
+                    LogMessages.ERROR_VALIDATION_FAILED,
+                    "password must not be an empty string",
+                    HttpStatus.BAD_REQUEST
+            );
+        }
         // If password is provided, encryption_method is mandatory
         if (password != null && !password.isBlank()) {
             if (encryptionMethod == null) {
@@ -1787,6 +1789,16 @@ public class UserProvisioningService {
     private void updatePassword(UserEntity user, UpdateUserRequest request) {
         boolean isPasswordProvided = request.getPassword() != null && !request.getPassword().isBlank();
         boolean isEncryptionMethodProvided = request.getEncryptionMethod() != null;
+        String password = request.getPassword();
+
+        // Reject explicitly empty password string
+        if (password != null && password.isBlank()) {
+            throw new AAAException(
+                    LogMessages.ERROR_VALIDATION_FAILED,
+                    "password must not be an empty string",
+                    HttpStatus.BAD_REQUEST
+            );
+        }
 
         // Case 1: Only encryption_method provided (no password)
         if (!isPasswordProvided && isEncryptionMethodProvided) {
@@ -2142,20 +2154,28 @@ public class UserProvisioningService {
             }
         }
 
-        // IPOE validation - check BOTH request and existing user MAC
+        // IPOE validation - either password or MAC must be available (in request or existing user)
         if (IPOE.equalsIgnoreCase(newNasPortType)) {
+            boolean hasPasswordInRequest = !isBlank(request.getPassword());
+            boolean hasPasswordInDb = !isBlank(user.getPassword());
             boolean hasMacInRequest = !isBlank(request.getMacAddress());
 
-            // Check if MAC exists in database
+            // Check if MAC exists in database only when not provided in request
+            boolean hasMacInDb = false;
             if (!hasMacInRequest) {
                 List<UserToMac> existingMacs = userToMacRepository.findByUserName(user.getUserName());
-                if (existingMacs.isEmpty()) {
-                    throw new AAAException(
-                            LogMessages.ERROR_VALIDATION_FAILED,
-                            LogMessages.MSG_MAC_REQUIRED_IPOE,
-                            HttpStatus.UNPROCESSABLE_ENTITY
-                    );
-                }
+                hasMacInDb = !existingMacs.isEmpty();
+            }
+
+            boolean hasPasswordAvailable = hasPasswordInRequest || hasPasswordInDb;
+            boolean hasMacAvailable = hasMacInRequest || hasMacInDb;
+
+            if (!hasPasswordAvailable && !hasMacAvailable) {
+                throw new AAAException(
+                        LogMessages.ERROR_VALIDATION_FAILED,
+                        LogMessages.MSG_PASSWORD_OR_MAC_REQUIRED_IPOE,
+                        HttpStatus.UNPROCESSABLE_ENTITY
+                );
             }
 
             // Second check: IP allocation requirement
@@ -2436,9 +2456,9 @@ public class UserProvisioningService {
                 .ipv6(user.getIpv6())
                 .status(user.getStatus() != null ? user.getStatus().getCode() : null)
                 .subscription(user.getSubscription() != null ? user.getSubscription().getCode() : null)
-                .contactName(user.getContactName())
+                /*.contactName(user.getContactName())
                 .contactEmail(user.getContactEmail())
-                .contactNumber(user.getContactNumber())
+                .contactNumber(user.getContactNumber())*/
                 .concurrency(user.getConcurrency())
                 .billing(user.getBilling())
                 .cycleDate(user.getCycleDate())
@@ -2518,16 +2538,16 @@ public class UserProvisioningService {
                     .ifPresentOrElse(
                             event -> {
                                 notificationPublisher.publish(event);
-                                log.info("USER_CREATION notification dispatched for user '{}'",
-                                        user.getUserName());
+                                // Move this to debug
+                                log.info("USER_CREATION notification dispatched for user '{}'", user.getUserName());
                             },
-                            () -> log.info(
+                            () -> log.debug(
                                     "No USER_CREATION child template for superTemplateId={}, " +
                                             NOTIFICATION_SKIPPED,
                                     user.getTemplateId(), user.getUserName())
                     );
         } catch (Exception e) {
-            // Notification failure must NEVER block the user creation response
+            // Keep WARN for actual failures
             log.warn("Failed to send USER_CREATION notification for user '{}': {}",
                     user.getUserName(), e.getMessage(), e);
         }
@@ -2543,15 +2563,17 @@ public class UserProvisioningService {
                     .ifPresentOrElse(
                             event -> {
                                 notificationPublisher.publish(event);
-                                log.info("USER_UPDATE notification dispatched for user '{}'",
-                                        user.getUserName());
+                                // Keep dispatch info at INFO
+                                log.info("USER_UPDATE notification dispatched for user '{}'", user.getUserName());
                             },
-                            () -> log.info(
+                            // Move routine 'no template' info to DEBUG
+                            () -> log.debug(
                                     "No USER_UPDATE child template for superTemplateId={}, " +
                                             NOTIFICATION_SKIPPED,
                                     user.getTemplateId(), user.getUserName())
                     );
         } catch (Exception e) {
+            // Keep failures at WARN
             log.warn("Failed to send USER_UPDATE notification for user '{}': {}",
                     user.getUserName(), e.getMessage(), e);
         }
@@ -2562,15 +2584,17 @@ public class UserProvisioningService {
                     .ifPresentOrElse(
                             event -> {
                                 notificationPublisher.publish(event);
-                                log.info("USER_DELETION notification dispatched for user '{}'",
-                                        user.getUserName());
+                                // Keep dispatch info at INFO
+                                log.info("USER_DELETION notification dispatched for user '{}'", user.getUserName());
                             },
-                            () -> log.info(
+                            // Routine 'no template' → DEBUG
+                            () -> log.debug(
                                     "No USER_DELETION child template for superTemplateId={}, " +
                                             NOTIFICATION_SKIPPED,
                                     user.getTemplateId(), user.getUserName())
                     );
         } catch (Exception e) {
+            // Keep failures at WARN
             log.warn("Failed to send USER_DELETION notification for user '{}': {}",
                     user.getUserName(), e.getMessage(), e);
         }
@@ -2590,5 +2614,26 @@ public class UserProvisioningService {
             log.warn("Async CoA failed for user '{}' (status {} → {}): {}",
                     userName, oldStatus, newStatus, e.getMessage(), e);
         }
+    }
+    public Map<String, Long> getUserStatusCounts() {
+        Map<String, Long> counts = new HashMap<>(Map.of(
+                "active",   0L,
+                "barred",   0L,
+                "inactive", 0L
+        ));
+
+        userRepository.countByStatus().forEach(row -> {
+            UserStatus status = (UserStatus) row[0];
+            Long count = (Long) row[1];
+            if (status != null) {
+                switch (status) {
+                    case ACTIVE   -> counts.put("active",   count);
+                    case BARRED   -> counts.put("barred",   count);
+                    case INACTIVE -> counts.put("inactive", count);
+                }
+            }
+        });
+
+        return counts;
     }
 }

@@ -44,7 +44,8 @@ public class NotificationPublisher {
         try {
             String payload = objectMapper.writeValueAsString(event);
 
-            log.info("Publishing notification: type='{}', user='{}', topic='{}'",
+            // Routine info → debug
+            log.debug("Publishing notification: type='{}', user='{}', topic='{}'",
                     event.getMessageType(), userName, notificationTopic);
 
             CompletableFuture<SendResult<String, String>> future =
@@ -55,7 +56,8 @@ public class NotificationPublisher {
                     log.error("Failed to publish notification for user '{}': {}",
                             userName, ex.getMessage(), ex);
                 } else {
-                    log.info("Notification published for user '{}' → partition={}, offset={}",
+                    // Routine success → debug
+                    log.debug("Notification published for user '{}' → partition={}, offset={}",
                             userName,
                             result.getRecordMetadata().partition(),
                             result.getRecordMetadata().offset());

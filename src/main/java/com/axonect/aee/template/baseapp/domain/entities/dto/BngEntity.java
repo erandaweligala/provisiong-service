@@ -23,7 +23,7 @@ public class BngEntity {
     @Column(name = "bng_name", nullable = false, unique = true)
     private String bngName;
 
-    @Column(name = "bng_ip", nullable = false)
+    @Column(name = "bng_ip")
     private String bngIp;
 
     @Column(name = "bng_type_vendor", nullable = false)
@@ -38,13 +38,13 @@ public class BngEntity {
     @Column(name = "nas_identifier", nullable = false)
     private String nasIdentifier;
 
-    @Column(name = "coa_ip", nullable = false)
+    @Column(name = "coa_ip")
     private String coaIp;
 
-    @Column(name = "coa_port", nullable = false)
+    @Column(name = "coa_port")
     private Integer coaPort;
 
-    @Column(name = "shared_secret", nullable = false)
+    @Column(name = "shared_secret")
     private String sharedSecret;
 
     @Column(name = "location", nullable = false)

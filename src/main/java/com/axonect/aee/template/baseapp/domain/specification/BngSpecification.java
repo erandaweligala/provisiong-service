@@ -33,10 +33,10 @@ public class BngSpecification {
                 ));
             }
 
-            if (filter.getBngIp() != null && !filter.getBngIp().isBlank()) {
+            if (filter.getNasIpAddress() != null && !filter.getNasIpAddress().isBlank()) {
                 predicates.add(criteriaBuilder.like(
-                        criteriaBuilder.lower(root.get("bngIp")),
-                        "%" + filter.getBngIp().toLowerCase() + "%"
+                        criteriaBuilder.lower(root.get("nasIpAddress")),
+                        "%" + filter.getNasIpAddress().toLowerCase() + "%"
                 ));
             }
 

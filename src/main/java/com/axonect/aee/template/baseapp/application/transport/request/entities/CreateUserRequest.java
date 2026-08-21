@@ -29,7 +29,8 @@ public class CreateUserRequest {
     private String userName;
 
     @JsonProperty("password")
-    private String password; // Required if nas_port_type = PPPoE
+    @NotBlank(message = "Password is mandatory")
+    private String password;
 
     @JsonProperty("encryption_method")
     private Integer encryptionMethod;

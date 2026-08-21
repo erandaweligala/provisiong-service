@@ -30,29 +30,8 @@ public class AuthController {
 
     // ── Token endpoints ────────────────────────────────────────────────────
 
-    @PostMapping("/token")
-    public ResponseEntity<ApiResponse> generateToken(
-            @Valid @RequestBody TokenRequest request) {
 
-        log.info("Token request for user='{}'", request.getUsername());
-        TokenResponse tokenResponse = authService.login(request);
 
-        return ResponseEntity.ok(
-                ApiResponse.success("Token generated successfully", tokenResponse)
-        );
-    }
-
-    @DeleteMapping("/token")
-    public ResponseEntity<ApiResponse> revokeToken(
-            @RequestHeader("Authorization") String authHeader) {
-
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            authService.logout(authHeader.substring(7));
-        }
-        return ResponseEntity.ok(
-                ApiResponse.success("Token revoked successfully", null)
-        );
-    }
 
     // ── Credential management endpoints ────────────────────────────────────
 

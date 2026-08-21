@@ -27,10 +27,10 @@ public class QOSProfile {
     @Column(name = "QOS_PROFILE_NAME", length = 255, nullable = false)
     private String qosProfileName;
     
-    @Column(name = "UPLINK_SPEED", length = 255, nullable = false)
+    @Column(name = "UPLINK_SPEED", length = 255)
     private String upLink;
     
-    @Column(name = "DOWNLINK_SPEED", length = 255, nullable = false)
+    @Column(name = "DOWNLINK_SPEED", length = 255)
     private String downLink;
 
     @Column(name = "IS_DEFAULT",nullable = false)

@@ -81,6 +81,7 @@ public final class LogMessages {
     public static final String MSG_NAS_PORT_INVALID = "nas_port_type must be PPPoE or IPoE";
     public static final String MSG_PASSWORD_REQUIRED_PPPOE = "Password is required when nas_port_type = PPPoE";
     public static final String MSG_MAC_REQUIRED_IPOE = "MAC address is required when nas_port_type = IPoE";
+    public static final String MSG_PASSWORD_OR_MAC_REQUIRED_IPOE = "For IPoE, either password or MAC address is required";
     public static final String MSG_IP_ALLOCATION_REQUIRED_IPOE = "ip_allocation is required when nas_port_type = IPoE";
     public static final String MSG_IPV4_IPV6_REQUIRED_STATIC = "IPv4 or IPv6 address is required when ip_allocation = static";
     public static final String MSG_IPV6_REQUIRED_STATIC = "IPv6 address is required when ip_allocation = static";
@@ -104,8 +105,11 @@ public final class LogMessages {
     public static final String MSG_QUOTA_MANDATORY = "Quota Percentage is Mandatory";
     public static final String MSG_TEMPLATE_NOT_FOUND = "Notification Template Not Found";
     public static final String MSG_INVALID_QUOTA = "Quota Percentage should be a value between 0 - 100";
+    public static final String INTERNAL_SERVER_ERROR = "Internal server error";
     public static final String MSG_CREATED_BY_MANDATORY = "Created By is Mandatory";
     public static final String MSG_UPDATED_BY_MANDATORY = "Updated By is Mandatory";
+    public static final String ERROR_PUBLISHING_INTO_KAFKA = "Error occurred while publishing payload into Kafka: {}";
+
 
     public static final String ERROR_FETCHING_USER_LIST = "Error occurred while fetching user list: {}";
     public static final String MSG_TEMPLATE_IN_USE = "Template is currently in use and cannot be deleted";

@@ -39,10 +39,10 @@ public class BucketInstance {
     @Column(name = "PRIORITY", nullable = false, length = 64)
     private Long priority;
 
-    @Column(name = "INITIAL_BALANCE", nullable = false, length = 64)
+    @Column(name = "INITIAL_BALANCE", length = 64)
     private Long initialBalance;
 
-    @Column(name = "CURRENT_BALANCE", nullable = false, length = 64)
+    @Column(name = "CURRENT_BALANCE", length = 64)
     private Long currentBalance;
 
     @Column(name = "USAGE", nullable = false, length = 64)

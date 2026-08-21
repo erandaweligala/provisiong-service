@@ -38,6 +38,7 @@ public class ActionLogService {
             Boolean success,
             LocalDateTime startTime,
             LocalDateTime endTime,
+            String channel,
             int page,
             int limit
     ) {
@@ -47,7 +48,7 @@ public class ActionLogService {
             Page<ActionLog> result = actionLogRepository.findAll(
                     ActionLogSpecifications.filterLogs(
                             action, groupId, requestId, username, resultCode,
-                            httpStatus, description, success, startTime, endTime
+                            httpStatus, description, success, startTime, endTime, channel
                     ),
                     pageable
             );

@@ -1,12 +1,12 @@
 package com.axonect.aee.template.baseapp.domain.service;
 
+import com.axonect.aee.template.baseapp.domain.entities.dto.Balance;
+import com.axonect.aee.template.baseapp.domain.entities.dto.BalanceWrapper;
 import com.axonect.aee.template.baseapp.domain.entities.dto.BucketInstance;
-import com.axonect.aee.template.baseapp.domain.entities.dto.CacheBucketRequest;
-import com.axonect.aee.template.baseapp.domain.exception.CacheBucketException;
+import com.axonect.aee.template.baseapp.domain.entities.dto.ServiceInstance;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -14,16 +14,12 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.List;
 
 @Service
 @Slf4j
 @RequiredArgsConstructor
 public class AccountingCacheManagementService {
-
-    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
     private final WebClient cacheApiWebClient;
 
@@ -39,160 +35,95 @@ public class AccountingCacheManagementService {
     @Value("${cache.api.retry.max-backoff:10}")
     private int maxBackoffSeconds;
 
-    @Value("${cache.api.timeout.request:10}")
-    private int requestTimeoutSeconds;
-
     /**
-     * Sync buckets to cache - processes buckets sequentially
+     * Async fire-and-forget sync of all buckets as a single BalanceWrapper request.
+     * Uses reactive subscribe() so the call returns immediately without blocking the caller,
+     * ensuring it does not impact the response time of Activate Service or Update Service.
      */
-    public void syncBuckets(String bucketUsername,String serviceStatus, List<BucketInstance> bucketInstances) {
+    public void syncBuckets(List<BucketInstance> bucketInstances,
+                            String sessionTimeout, long concurrency, ServiceInstance serviceInstance) {
 
-        if (!StringUtils.hasText(bucketUsername)) {
-            throw new IllegalArgumentException("Bucket username cannot be null or empty");
-        }
-
-        if (bucketInstances == null || bucketInstances.isEmpty()) {
-            log.warn("No bucket instances provided for user: {}", bucketUsername);
+        if (!StringUtils.hasText(serviceInstance.getUsername())) {
+            log.error("Bucket username is null or empty, skipping bucket sync");
             return;
         }
 
-        log.info("Starting sync for user: {}, bucket count: {}", bucketUsername, bucketInstances.size());
-
-        long startTime = System.currentTimeMillis();
-        List<String> failedBucketIds = new ArrayList<>();
-        int successCount = 0;
-
-        // Process buckets one by one
-        for (int i = 0; i < bucketInstances.size(); i++) {
-            BucketInstance bucket = bucketInstances.get(i);
-
-            log.info("Processing bucket {}/{} - bucketId: {} for user: {}",
-                    i + 1, bucketInstances.size(), bucket.getBucketId(), bucketUsername);
-
-            try {
-                processBucket(bucketUsername,serviceStatus, bucket);
-                successCount++;
-                log.info("Successfully synced bucket {}/{} - bucketId: {}",
-                        i + 1, bucketInstances.size(), bucket.getBucketId());
-            } catch (Exception e) {
-                log.error("Failed to sync bucket {}/{} - bucketId: {}",
-                        i + 1, bucketInstances.size(), bucket.getBucketId(), e);
-                failedBucketIds.add(bucket.getBucketId());
-            }
+        if (bucketInstances == null || bucketInstances.isEmpty()) {
+            log.warn("No bucket instances provided for user: {}, skipping bucket sync", serviceInstance.getUsername());
+            return;
         }
 
-        long duration = System.currentTimeMillis() - startTime;
-        int failedCount = failedBucketIds.size();
+        List<Balance> balanceList = bucketInstances.stream()
+                .map(b -> buildBalance(b, serviceInstance))
+                .toList();
 
-        log.info("Batch sync completed for user: {}. Success: {}, Failed: {}, Total: {}, Duration: {}ms",
-                bucketUsername, successCount, failedCount, bucketInstances.size(), duration);
+        BalanceWrapper wrapper = new BalanceWrapper();
+        wrapper.setSessionTimeOut(sessionTimeout);
+        wrapper.setConcurrency(concurrency);
+        wrapper.setBalance(balanceList);
 
-        // Throw exception if any bucket failed
-        if (!failedBucketIds.isEmpty()) {
-            String failedBuckets = String.join(", ", failedBucketIds);
-            String errorMessage = String.format(
-                    "Batch sync completed with %d failures out of %d buckets. Failed buckets: [%s]",
-                    failedCount, bucketInstances.size(), failedBuckets);
+        String fullUrl = cacheApiUrl.replace("{bucketUsername}", serviceInstance.getUsername());
 
-            log.error("Batch sync failed for user: {}. {}", bucketUsername, errorMessage);
-            throw new CacheBucketException(errorMessage, bucketUsername, null);
-        }
+        log.info("Dispatching async bucket sync for user: {}, bucket count: {}", serviceInstance.getUsername(), bucketInstances.size());
 
-        log.info("All buckets synced successfully for user: {} in {}ms", bucketUsername, duration);
-    }
-
-    /**
-     * Process single bucket
-     */
-    private void processBucket(String bucketUsername, String serviceStatus, BucketInstance bucket) {
-
-        // Validate bucket
-        if (bucket == null) {
-            throw new IllegalArgumentException("Bucket instance is null");
-        }
-
-        if (!StringUtils.hasText(bucket.getBucketId())) {
-            throw new IllegalArgumentException("Bucket ID is null or empty");
-        }
-
-        // Build request
-        CacheBucketRequest request = buildRequest(bucket, bucketUsername,serviceStatus);
-
-        // Build URL
-        String fullUrl = cacheApiUrl.replace("{bucketUsername}", bucketUsername);
-
-        log.debug("Making PATCH request to: {}", fullUrl);
-
-        // Make API call and wait for response
-        // Timeout is handled at HttpClient level (ReadTimeoutHandler) — no duplicate .timeout() needed
         cacheApiWebClient
                 .patch()
                 .uri(fullUrl)
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(request)
+                .bodyValue(wrapper)
                 .retrieve()
                 .toBodilessEntity()
                 .retryWhen(Retry.backoff(maxRetryAttempts, Duration.ofSeconds(initialBackoffSeconds))
                         .maxBackoff(Duration.ofSeconds(maxBackoffSeconds))
                         .filter(this::shouldRetry)
                         .doBeforeRetry(signal ->
-                                log.warn("Retrying bucketId: {} for user: {}, attempt: {}/{}",
-                                        bucket.getBucketId(), bucketUsername,
-                                        signal.totalRetries() + 1, maxRetryAttempts)))
-                .block(); // Block and wait for completion
+                                log.warn("Retrying bucket sync for user: {}, attempt: {}/{}",
+                                        serviceInstance.getUsername(), signal.totalRetries() + 1, maxRetryAttempts)))
+                .subscribe(
+                        r -> log.info("Async bucket sync completed successfully for user: {}", serviceInstance.getUsername()),
+                        e -> log.error("Async bucket sync failed for user: {}", serviceInstance.getUsername(), e));
     }
 
-    /**
-     * Determine if should retry
-     */
+    private Balance buildBalance(BucketInstance instance, ServiceInstance serviceInstance) {
+        Balance balance = new Balance();
+        balance.setInitialBalance(instance.getInitialBalance() != null ? instance.getInitialBalance() : 0L);
+        balance.setQuota(instance.getCurrentBalance() != null ? instance.getCurrentBalance() : 0L);
+        balance.setServiceExpiry(serviceInstance.getExpiryDate());
+        balance.setBucketExpiryDate(instance.getExpiration());
+        balance.setBucketId(instance.getBucketId());
+        balance.setServiceId(String.valueOf(instance.getServiceId()));
+        balance.setPriority(instance.getPriority());
+        balance.setServiceStartDate(serviceInstance.getServiceStartDate());
+        balance.setServiceStatus(serviceInstance.getStatus());
+        balance.setTimeWindow(instance.getTimeWindow());
+        balance.setConsumptionLimit(instance.getConsumptionLimit());
+        balance.setConsumptionLimitWindow(parseConsumptionLimitWindow(instance.getConsumptionLimitWindow()));
+        balance.setBucketUsername(serviceInstance.getUsername());
+        balance.setUnlimited(instance.getIsUnlimited());
+        balance.setGroup(serviceInstance.getIsGroup());
+        balance.setUsage(instance.getUsage());
+        return balance;
+    }
+
     private boolean shouldRetry(Throwable throwable) {
         if (throwable instanceof org.springframework.web.reactive.function.client.WebClientResponseException ex) {
             int status = ex.getStatusCode().value();
             return status >= 500 || status == 429 || status == 408;
         }
         return throwable instanceof java.util.concurrent.TimeoutException
-                || throwable instanceof java.io.IOException
-                || throwable instanceof java.net.ConnectException;
+                || throwable instanceof java.io.IOException;
     }
 
-    /**
-     * Build request from bucket instance
-     */
-    private CacheBucketRequest buildRequest(BucketInstance instance, String bucketUsername, String serviceStatus) {
-        return CacheBucketRequest.builder()
-                .initialBalance(instance.getInitialBalance() != null ? instance.getInitialBalance() : 0L)
-                .quota(instance.getInitialBalance() != null ? instance.getInitialBalance() : 0L)
-                .serviceExpiry(instance.getExpiration() != null ?
-                        instance.getExpiration().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + ".951" :
-                        java.time.LocalDateTime.now().plusYears(1).format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + ".951")
-                .bucketId(instance.getBucketId())
-                .serviceId(String.valueOf(instance.getServiceId()))
-                .priority(instance.getPriority() != null ? instance.getPriority().intValue() : 4)
-                .serviceStartDate(instance.getExpiration() != null ?
-                        instance.getExpiration().minusMonths(2).format(DATE_TIME_FORMATTER) :
-                        java.time.LocalDateTime.now().format(DATE_TIME_FORMATTER))
-                .serviceStatus(serviceStatus)
-                .timeWindow(StringUtils.hasText(instance.getTimeWindow()) ? instance.getTimeWindow() : "6AM-03AM")
-                .consumptionLimit(instance.getConsumptionLimit() != null ? instance.getConsumptionLimit() : 0L)
-                .consumptionLimitWindow(parseConsumptionWindow(instance.getConsumptionLimitWindow()))
-                .bucketUsername(bucketUsername)
-                .group(false)
-                .build();
-    }
-
-    /**
-     * Parse consumption window
-     */
-    private Integer parseConsumptionWindow(String window) {
+    private Long parseConsumptionLimitWindow(String window) {
         if (!StringUtils.hasText(window)) {
-            return 24;
+            return 24L;
         }
         try {
-            int parsed = Integer.parseInt(window.trim());
-            return parsed > 0 ? parsed : 24;
+            long parsed = Long.parseLong(window.trim());
+            return parsed > 0 ? parsed : 24L;
         } catch (NumberFormatException e) {
-            log.warn("Invalid consumption window: {}, using default 24", window);
-            return 24;
+            log.warn("Invalid consumption limit window: {}, using default 24", window);
+            return 24L;
         }
     }
 }

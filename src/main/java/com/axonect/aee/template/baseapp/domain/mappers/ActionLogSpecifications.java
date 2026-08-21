@@ -20,6 +20,7 @@ public class ActionLogSpecifications {
     private static final String FIELD_HTTP_STATUS = "httpStatus";
     private static final String FIELD_DESCRIPTION = "description";
     private static final String FIELD_DATE_TIME   = "dateTime";
+    private static final String FIELD_CHANNEL   = "channel";
     private static final String HTTP_200          = "200";
     private static final String HTTP_201          = "201";
 
@@ -37,12 +38,13 @@ public class ActionLogSpecifications {
             String description,
             Boolean success,
             LocalDateTime startTime,
-            LocalDateTime endTime
+            LocalDateTime endTime,
+            String channel
     ) {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
 
-            addEqualPredicates(predicates, root, cb, action, groupId, requestId, username, resultCode, httpStatus);
+            addEqualPredicates(predicates, root, cb, action, groupId, requestId, username, resultCode, httpStatus, channel);
             addDescriptionPredicate(predicates, root, cb, description);
             addSuccessPredicate(predicates, root, cb, success);
             addDateRangePredicates(predicates, root, cb, startTime, endTime);
@@ -60,14 +62,20 @@ public class ActionLogSpecifications {
             String requestId,
             String username,
             String resultCode,
-            String httpStatus
+            String httpStatus,
+            String channel
     ) {
-        if (action != null)      predicates.add(cb.equal(root.get(FIELD_ACTION),      action));
-        if (groupId != null)     predicates.add(cb.equal(root.get(FIELD_GROUP_ID),    groupId));
-        if (requestId != null)   predicates.add(cb.equal(root.get(FIELD_REQUEST_ID),  requestId));
-        if (username != null)    predicates.add(cb.equal(root.get(FIELD_USERNAME),    username));
-        if (resultCode != null)  predicates.add(cb.equal(root.get(FIELD_RESULT_CODE), resultCode));
-        if (httpStatus != null)  predicates.add(cb.equal(root.get(FIELD_HTTP_STATUS), httpStatus));
+        if (hasValue(action))     predicates.add(cb.equal(root.get(FIELD_ACTION),      action));
+        if (hasValue(groupId))    predicates.add(cb.equal(root.get(FIELD_GROUP_ID),    groupId));
+        if (hasValue(requestId))  predicates.add(cb.equal(root.get(FIELD_REQUEST_ID),  requestId));
+        if (hasValue(username))   predicates.add(cb.equal(root.get(FIELD_USERNAME),    username));
+        if (hasValue(resultCode)) predicates.add(cb.equal(root.get(FIELD_RESULT_CODE), resultCode));
+        if (hasValue(httpStatus)) predicates.add(cb.equal(root.get(FIELD_HTTP_STATUS), httpStatus));
+        if (hasValue(channel))    predicates.add(cb.equal(root.get(FIELD_CHANNEL),     channel));
+    }
+
+    private static boolean hasValue(String value) {
+        return value != null && !value.isBlank();
     }
 
     private static void addDescriptionPredicate(
@@ -76,7 +84,7 @@ public class ActionLogSpecifications {
             CriteriaBuilder cb,
             String description
     ) {
-        if (description != null) {
+        if (hasValue(description)) {
             predicates.add(cb.like(root.get(FIELD_DESCRIPTION), "%" + description + "%"));
         }
     }

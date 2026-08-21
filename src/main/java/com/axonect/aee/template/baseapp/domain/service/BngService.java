@@ -52,6 +52,7 @@ public class BngService {
     private final BngRepository bngRepository;
     private final KafkaEventPublisher kafkaEventPublisher;
     private final EventMapper eventMapper;
+    private final PingService pingService;
 
     @Transactional
     public CreateBngResponse createBng(BngCreateRequest request, String createdBy) {
@@ -68,6 +69,7 @@ public class BngService {
                     () -> bngRepository.existsByBngName(request.getBngName()));
 
             validateStatus(request.getStatus());
+            validateIpFields(request.getBngIp(), request.getNasIpAddress(), request.getCoaIp());
 
             if (Boolean.TRUE.equals(idExists.join())) {
                 log.warn(LogMessages.BNG_DUPLICATE_ID, request.getBngId());
@@ -213,7 +215,8 @@ public class BngService {
             List<BngListResponse> response = allBngs.stream()
                     .map(bng -> BngListResponse.builder()
                             .bngName(bng.getBngName())
-                            .bngIp(bng.getBngIp())
+                            .bngIp(bng.getNasIpAddress())
+                            .bngId(bng.getBngId())
                             .build())
                     .toList();
 
@@ -263,11 +266,11 @@ public class BngService {
         updateStatus(bng, request);
     }
 
-    private void updateBngIp(BngEntity bng, BngUpdateRequest request) {
+    /*private void updateBngIp(BngEntity bng, BngUpdateRequest request) {
         if (request.getBngIp() != null && !request.getBngIp().isBlank()) {
             bng.setBngIp(request.getBngIp());
         }
-    }
+    }*/
 
     private void updateBngTypeVendor(BngEntity bng, BngUpdateRequest request) {
         if (request.getBngTypeVendor() != null && !request.getBngTypeVendor().isBlank()) {
@@ -281,11 +284,11 @@ public class BngService {
         }
     }
 
-    private void updateNasIpAddress(BngEntity bng, BngUpdateRequest request) {
+    /*private void updateNasIpAddress(BngEntity bng, BngUpdateRequest request) {
         if (request.getNasIpAddress() != null && !request.getNasIpAddress().isBlank()) {
             bng.setNasIpAddress(request.getNasIpAddress());
         }
-    }
+    }*/
 
     private void updateNasIdentifier(BngEntity bng, BngUpdateRequest request) {
         if (request.getNasIdentifier() != null && !request.getNasIdentifier().isBlank()) {
@@ -293,11 +296,11 @@ public class BngService {
         }
     }
 
-    private void updateCoaIp(BngEntity bng, BngUpdateRequest request) {
+    /*private void updateCoaIp(BngEntity bng, BngUpdateRequest request) {
         if (request.getCoaIp() != null && !request.getCoaIp().isBlank()) {
             bng.setCoaIp(request.getCoaIp());
         }
-    }
+    }*/
 
     private void updateCoaPort(BngEntity bng, BngUpdateRequest request) {
         if (request.getCoaPort() != null) {
@@ -321,6 +324,26 @@ public class BngService {
         if (request.getStatus() != null && !request.getStatus().isBlank()) {
             validateStatus(request.getStatus());
             bng.setStatus(request.getStatus());
+        }
+    }
+    private void updateBngIp(BngEntity bng, BngUpdateRequest request) {
+        if (request.getBngIp() != null && !request.getBngIp().isBlank()) {
+            validateIpField("BNG IP", request.getBngIp());
+            bng.setBngIp(request.getBngIp());
+        }
+    }
+
+    private void updateNasIpAddress(BngEntity bng, BngUpdateRequest request) {
+        if (request.getNasIpAddress() != null && !request.getNasIpAddress().isBlank()) {
+            validateIpField("NAS IP Address", request.getNasIpAddress());
+            bng.setNasIpAddress(request.getNasIpAddress());
+        }
+    }
+
+    private void updateCoaIp(BngEntity bng, BngUpdateRequest request) {
+        if (request.getCoaIp() != null && !request.getCoaIp().isBlank()) {
+            validateIpField("CoA IP", request.getCoaIp());
+            bng.setCoaIp(request.getCoaIp());
         }
     }
 
@@ -581,6 +604,43 @@ public class BngService {
             throw ex;
         } finally {
             MDC.clear();
+        }
+    }
+    /**
+     * Validates a single IP field — rejects domains, loopback,
+     * unspecified, and non-allowlisted addresses.
+     */
+    private void validateIpField(String fieldName, String ip) {
+        if (!pingService.isValidPingableIp(ip)) {
+            log.warn("SSRF protection: {} '{}' rejected — domain, loopback or invalid", fieldName, ip);
+            throw new AAAException(
+                    LogMessages.VALIDATION_FAILED,
+                    fieldName + " '" + ip + "' is invalid, a domain name, or a reserved address",
+                    HttpStatus.UNPROCESSABLE_ENTITY
+            );
+        }
+        if (!pingService.isAllowedIp(ip)) {
+            log.warn("SSRF protection: {} '{}' rejected — not in allowlisted CIDR range", fieldName, ip);
+            throw new AAAException(
+                    LogMessages.VALIDATION_FAILED,
+                    fieldName + " '" + ip + "' is not within an allowlisted IP range",
+                    HttpStatus.UNPROCESSABLE_ENTITY
+            );
+        }
+    }
+
+    /**
+     * Validates all IP fields on a create request at once.
+     */
+    private void validateIpFields(String bngIp, String nasIpAddress, String coaIp) {
+        if (bngIp != null && !bngIp.isBlank()) {
+            validateIpField("BNG IP", bngIp);
+        }
+        if (nasIpAddress != null && !nasIpAddress.isBlank()) {
+            validateIpField("NAS IP Address", nasIpAddress);
+        }
+        if (coaIp != null && !coaIp.isBlank()) {
+            validateIpField("CoA IP", coaIp);
         }
     }
 }

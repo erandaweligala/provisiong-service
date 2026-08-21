@@ -15,8 +15,8 @@ app:
     group-id: 1
 
   encryption:
-    algorithm: AES
-    secret-key: "Your16CharKey123"
+    algorithm: "${ENCRYPTION_TYPE}"
+    secret-key: "${ENCRYPTION_SECRET_KEY}"
   async:
     core-pool-size: 50
     max-pool-size: 200
@@ -24,7 +24,7 @@ app:
     thread-name-prefix: "async-validation-"
 
   jwt:
-    secret: bXlTdXBlclNlY3JldEtleUZvckpXVEF1dGhlbnRpY2F0aW9uMjAyNA==  # Base64 encoded, min 32 chars
+    secret: "${JWT_SECRET}"  # Base64 encoded, min 32 chars
     expiration-ms: 3600000
 
   kafka:
@@ -85,8 +85,8 @@ springdoc:
 spring:
   datasource:
     url: jdbc:oracle:thin:@aaa-dev.cn8eyeqma3tp.ap-southeast-2.rds.amazonaws.com:1521/ORCL
-    username: aaa
-    password: Aaa!89nky78D
+    username: "${DB_USER}"
+    password: "${DB_PASSWORD}"
     driver-class-name: oracle.jdbc.OracleDriver
     hikari:
       maximum-pool-size: 50
@@ -101,7 +101,7 @@ spring:
         oracle.jdbc.ReadTimeout: 30000
 
   kafka:
-    bootstrap-servers: kafka-headless.cluster.svc.cluster.local:9092
+    bootstrap-servers: kafka-headless.cluster-dc.svc.cluster.local:9092
 
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
@@ -122,7 +122,7 @@ spring:
       group-id: spring-reply-group-provisioning   # UPDATED from local — was spring-reply-group; UNIQUE to provisioning service
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      auto-offset-reset: latest
+      auto-offset-reset: earliest
       enable-auto-commit: true
       properties:
         fetch.min.bytes: 1
@@ -133,13 +133,13 @@ spring:
   data:  #need to change in OCP
     redis:
       client-type: lettuce
-      password: AAAtest_Redis_Pass_w0rd!
+      password: "${REDIS_PASSWORD}"
       timeout: 120000ms
       sentinel:
-        master: mymaster
+        master: "${REDIS_MASTER_NAME}"
         nodes:
           - redis-cluster-headless.cluster-redis.svc.cluster.local:26379
-        password: AAAtest_Redis_Pass_w0rd!
+        password: "${REDIS_SENTINEL_PASSWORD}"
       lettuce:
         pool:
           max-active: 600        # equivalent to max-pool-size: 600
@@ -151,7 +151,7 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    show-sql: false
     properties:
       hibernate:
         format_sql: true
@@ -197,7 +197,7 @@ kafka:  #need to change in OCP
 # Cache API Configuration
 cache:
   api:
-    base-url: http://airtel-aaa-accounting-management-service-service.airtel-aaa.svc.cluster.local:9905/api/v1/cache/addBucket/{bucketUsername}
+    base-url: http://airtel-aaa-accounting-management-service-service.airtel-aaa.svc.cluster.local:9905/api/v1/cache/addBucketList/{bucketUsername}
     connect-timeout: 5000         # Connection timeout in milliseconds
     read-timeout: 10              # Read timeout in seconds
     write-timeout: 10             # Write timeout in seconds
@@ -238,18 +238,22 @@ thread:
   count:
     dbapiexecutor: 50
 
-#management:
-#  endpoints:
-#    web:
-#      base-path: /actuator
-#      exposure:
-#        include: "*"
-#      path-mapping:
-#        prometheus: prometheus
-#  endpoint:
-#    prometheus:
-#      enabled: true
-#  metrics:
-#    export:
-#      prometheus:
-#        enabled: true
+management:
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        include: "*"
+  endpoint:
+    prometheus:
+      enabled: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+action-log:
+  opco: aws-env
+
+ip-ping:
+  udp-ports: 3799,1812,1813

@@ -43,4 +43,23 @@ public class ActionLog {
 
     @Column(name = "DESCRIPTION")
     private String description;
+
+    @Column(name = "CHANNEL")
+    private String channel;
+
+    @Column(name = "RESPONSE_TIME")
+    private Long responseTime;
+
+    @Column(name = "APP")
+    private String application;
+
+    @Column(name = "OPCO")
+    private String opco;
+
+    @Column(name = "REQUEST_START_TIME")
+    private LocalDateTime requestStartTime;
+
+    @Column(name = "REQUEST_END_TIME")
+    private LocalDateTime requestEndTime;
+
 }

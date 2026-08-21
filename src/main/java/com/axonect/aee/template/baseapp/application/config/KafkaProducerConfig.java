@@ -13,7 +13,6 @@ import org.springframework.kafka.core.*;
 import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
 import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.requestreply.ReplyingKafkaTemplate;
-import org.springframework.kafka.support.TopicPartitionOffset;
 import org.springframework.kafka.support.serializer.JsonSerializer;
 
 import java.time.Duration;
@@ -23,53 +22,16 @@ import java.util.Map;
 @Configuration
 public class KafkaProducerConfig {
 
-
-    private static final String REPLY_GROUP_ID = "spring-reply-group-provisioning";
-
     @Value("${spring.kafka.bootstrap-servers}")
     private String bootstrapServers;
 
     @Value("${kafka.reply.topic:db-write-events-reply}")
     private String replyTopic;
 
-    // Must be strictly greater than the maximum expected pod replica count so that
-    // ordinal % replyTopicPartitions is unique per pod (no two pods collide on the
-    // same reply partition).  With 3 here pod-3 wraps back to partition 0, stealing
-    // replies from pod-0 and causing intermittent timeouts.
-    @Value("${app.kafka.reply.partitions:20}")
-    private int replyTopicPartitions;
 
-    @Value("${app.kafka.publish.timeout-ms:10000}")
-    private long publishTimeoutMs;
 
     @Value("${app.kafka.topic.db-write}")
     private String dbWriteTopic;
-
-    private int resolvePodPartition() {
-        String hostname = System.getenv("HOSTNAME");
-        if (hostname != null && !hostname.isBlank()) {
-            int dashIdx = hostname.lastIndexOf('-');
-            if (dashIdx >= 0) {
-                try {
-                    int ordinal = Integer.parseInt(hostname.substring(dashIdx + 1));
-                    return ordinal % replyTopicPartitions;
-                } catch (NumberFormatException ignored) {
-                    // Deployment random suffix – fall through to hash
-                }
-            }
-            return Math.abs(hostname.hashCode()) % replyTopicPartitions;
-        }
-        return 0;
-    }
-
-    /**
-     * Exposed as a Spring bean so {@link KafkaEventPublisher} can inject it
-     * and stamp every outgoing {@code REPLY_PARTITION} header.
-     */
-    @Bean
-    public Integer podReplyPartition() {
-        return resolvePodPartition();
-    }
 
 
 
@@ -125,27 +87,27 @@ public class KafkaProducerConfig {
             ConcurrentMessageListenerContainer<String, String> replyContainer) {
         ReplyingKafkaTemplate<String, Object, String> template =
                 new ReplyingKafkaTemplate<>(pf, replyContainer);
-        // Must be >= publishTimeoutMs in KafkaEventPublisher
-        template.setDefaultReplyTimeout(Duration.ofMillis(publishTimeoutMs));
+        // Hard ceiling — must be >= publishTimeoutMs in KafkaEventPublisher
+        template.setDefaultReplyTimeout(Duration.ofMillis(2500));
         return template;
     }
 
     @Bean
     public ConcurrentMessageListenerContainer<String, String> replyContainer(
-            ConsumerFactory<String, String> cf,
-            Integer podReplyPartition) {
+            ConsumerFactory<String, String> cf) {
 
         if (cf instanceof DefaultKafkaConsumerFactory) {
             ((DefaultKafkaConsumerFactory<String, String>) cf)
-                    .updateConfigs(Map.of(
-                            ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers,
-                            ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest"
-                    ));
+                    .updateConfigs(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers));
         }
 
-        TopicPartitionOffset tpo = new TopicPartitionOffset(replyTopic, podReplyPartition);
-        ContainerProperties containerProperties = new ContainerProperties(tpo);
-        containerProperties.setGroupId(REPLY_GROUP_ID);
+        ContainerProperties containerProperties = new ContainerProperties(replyTopic);
+
+        String podId = System.getenv("HOSTNAME");
+        if (podId == null || podId.isBlank()) {
+            podId = java.util.UUID.randomUUID().toString().substring(0, 8);
+        }
+        containerProperties.setGroupId("spring-reply-group-provisioning-" + podId);
 
         return new ConcurrentMessageListenerContainer<>(cf, containerProperties);
     }
@@ -159,6 +121,6 @@ public class KafkaProducerConfig {
 
     @Bean
     public NewTopic replyTopic() {
-        return TopicBuilder.name(replyTopic).partitions(replyTopicPartitions).replicas(1).build();
+        return TopicBuilder.name(replyTopic).partitions(3).replicas(1).build();
     }
 }

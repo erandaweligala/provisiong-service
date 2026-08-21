@@ -1,5 +1,6 @@
     package com.axonect.aee.template.baseapp.application.controller;
 
+    import com.axonect.aee.template.baseapp.application.constants.LoggingAdviceConstants;
     import com.axonect.aee.template.baseapp.application.transport.request.entities.CreateUserRequest;
     import com.axonect.aee.template.baseapp.application.transport.request.entities.DeleteUserRequest;
     import com.axonect.aee.template.baseapp.application.transport.request.entities.UpdateRequestDTO;
@@ -9,17 +10,26 @@
     import com.axonect.aee.template.baseapp.domain.service.UserProvisioningService;
     import com.axonect.aee.template.baseapp.domain.util.LoggableAction;
     import com.fasterxml.jackson.annotation.JsonInclude;
+    import com.fasterxml.jackson.core.JsonProcessingException;
+    import com.fasterxml.jackson.databind.ObjectMapper;
+    import jakarta.servlet.http.HttpServletRequest;
     import jakarta.validation.Valid;
     import jakarta.validation.constraints.Pattern;
     import lombok.AllArgsConstructor;
     import lombok.Getter;
     import lombok.RequiredArgsConstructor;
     import lombok.Setter;
+    import lombok.extern.java.Log;
     import lombok.extern.slf4j.Slf4j;
+    import org.slf4j.MDC;
     import org.springframework.http.ResponseEntity;
     import org.springframework.web.bind.annotation.*;
 
     import java.util.List;
+    import java.util.Map;
+    import java.util.UUID;
+
+    import static com.axonect.aee.template.baseapp.domain.util.Constants.USERNAME;
 
     /**
      * REST controller for managing User operations.
@@ -30,8 +40,10 @@
     @Slf4j
     public class UserController {
 
+
         private final UserProvisioningService userProvisioningService;
         private final ServiceProvisioningService serviceProvisioningService;
+        ObjectMapper mapper = new ObjectMapper();
 
         /**
          * Endpoint to create a new user.
@@ -41,16 +53,19 @@
          */
         @LoggableAction
         @PostMapping
-        public ResponseEntity<ApiResponse> createUser(@Valid @RequestBody CreateUserRequest request) throws Exception {
+        public ResponseEntity<ApiResponse> createUser(@Valid @RequestBody CreateUserRequest request, HttpServletRequest httpServletRequest) throws Exception,JsonProcessingException {
             long startTime = System.currentTimeMillis();
-            log.info("Received user creation request for username: {}", request.getUserName());
+            final String requestId = request.getRequestId();
+            MDC.put(LoggingAdviceConstants.REQUEST_ID, requestId);
+            MDC.put(LoggingAdviceConstants.USERNAME, request.getUserName());
+            log.info(LoggingAdviceConstants.REQUEST_INITIATED,"POST",httpServletRequest.getRequestURI(),mapper.writeValueAsString(request));
+
             // Delegate creation logic to UserService
             CreateUserResponse response = userProvisioningService.createUser(request);
+
             long duration = System.currentTimeMillis() - startTime;
-            log.info("Received user creation complete: {}", duration);
+            log.info(LoggingAdviceConstants.REQUEST_TERMINATED,duration,"User creation completed");
 
-
-            // Return a standardized API response
             return ResponseEntity.ok(
                     ApiResponse.success(
                             request.getRequestId(),
@@ -59,8 +74,6 @@
                             response
                     )
             );
-
-
         }
 
         /**
@@ -71,17 +84,23 @@
          */
         @LoggableAction
         @GetMapping("/{user_name}")
-        public ResponseEntity<ApiResponse> getUser(@PathVariable("user_name") String userName) {
+        public ResponseEntity<ApiResponse> getUser(@PathVariable("user_name") String userName, HttpServletRequest httpServletRequest) throws JsonProcessingException {
             long startTime = System.currentTimeMillis();
-
             try {
+                MDC.put(LoggingAdviceConstants.TRACE_ID, httpServletRequest.getRequestId());
+                MDC.put(LoggingAdviceConstants.USERNAME, userName);
+                log.info(LoggingAdviceConstants.REQUEST_INITIATED,"GET",httpServletRequest.getRequestURI());
+
                 GetUserResponse getUserResponse = userProvisioningService.getUserByUserName(userName);
+
                 return ResponseEntity.ok(
                         ApiResponse.success(getUserResponse)
                 );
+
             } finally {
                 long duration = System.currentTimeMillis() - startTime;
-                log.info("Execution time for GET /{} = {} ms", userName, duration);
+                log.info(LoggingAdviceConstants.REQUEST_TERMINATED,duration,"User retrieval request terminated");
+                MDC.clear();
             }
         }
 
@@ -93,17 +112,24 @@
          */
         @LoggableAction
         @GetMapping("service-lines/status/{serviceLineNumber}")
-        public ResponseEntity<ApiResponse> getServiceDetails(@PathVariable("serviceLineNumber") String userName) {
+        public ResponseEntity<ApiResponse> getServiceDetails(@PathVariable("serviceLineNumber") String userName, HttpServletRequest httpServletRequest){
             long startTime = System.currentTimeMillis();
-
             try {
-                ServiceLineResponse getUserResponse = userProvisioningService.getServiceDetailsByUsername(userName);
+                MDC.put(LoggingAdviceConstants.TRACE_ID, httpServletRequest.getRequestId());
+                MDC.put(LoggingAdviceConstants.USERNAME, userName);
+                log.info(LoggingAdviceConstants.REQUEST_INITIATED,"GET",httpServletRequest.getRequestURI());
+
+                ServiceLineResponse getUserResponse =
+                        userProvisioningService.getServiceDetailsByUsername(userName);
+
                 return ResponseEntity.ok(
                         ApiResponse.success(getUserResponse)
                 );
+
             } finally {
                 long duration = System.currentTimeMillis() - startTime;
-                log.info("Execution time for GET /{} = {} ms", userName, duration);
+                log.info(LoggingAdviceConstants.REQUEST_TERMINATED,duration,"Service retrieval request terminated");
+                MDC.clear();
             }
         }
 
@@ -112,18 +138,20 @@
          *
          * Example: GET /api/user/list
          */
+        @LoggableAction
         @GetMapping("/list")
-        public ResponseEntity<ApiResponse> getUserList() {
+        public ResponseEntity<ApiResponse> getUserList(HttpServletRequest httpServletRequest) {
             long startTime = System.currentTimeMillis();
-
             try {
+                MDC.put(LoggingAdviceConstants.TRACE_ID, httpServletRequest.getRequestId());
+                log.info(LoggingAdviceConstants.REQUEST_INITIATED, "GET", httpServletRequest.getRequestURI());
                 List<UserListResponse> userList = userProvisioningService.getUserList();
                 return ResponseEntity.ok(
                         ApiResponse.success("User list retrieved successfully", userList)
                 );
             } finally {
-                long duration = System.currentTimeMillis() - startTime;
-                log.info("Execution time for GET /list = {} ms", duration);
+                log.info(LoggingAdviceConstants.REQUEST_TERMINATED, System.currentTimeMillis() - startTime, "User List retrieval request terminated");
+                MDC.clear();
             }
         }
 
@@ -147,11 +175,21 @@
                 @RequestParam(value = "status", required = false) Integer status,
                 @RequestParam(value = "user_name", required = false) String userName,
                 @RequestParam(value = "subscription", required = false) Integer subscription,
-                @RequestParam(value = "group_id", required = false) String groupId) {
+                @RequestParam(value = "group_id", required = false) String groupId,
+                HttpServletRequest httpServletRequest) {
 
             long startTime = System.currentTimeMillis();
 
             try {
+                MDC.put(LoggingAdviceConstants.TRACE_ID,httpServletRequest.getRequestId());
+                MDC.put("page", String.valueOf(page));
+                MDC.put("pageSize", String.valueOf(pageSize));
+                if (status != null) MDC.put("status", String.valueOf(status));
+                if (userName != null) MDC.put("userName", userName);
+                if (subscription != null) MDC.put("subscription", String.valueOf(subscription));
+                if (groupId != null) MDC.put("groupId", groupId);
+                log.info(LoggingAdviceConstants.REQUEST_INITIATED,"GET",httpServletRequest.getRequestURI());
+
                 PagedUserResponse pagedResponse = userProvisioningService.getAllUsers(
                         page, pageSize, status, userName, subscription, groupId
                 );
@@ -165,10 +203,8 @@
 
             } finally {
                 long duration = System.currentTimeMillis() - startTime;
-                log.info(
-                        "Execution time for GET /users?page={}&pageSize={}&status={}&userName={}&subscription={}&groupId={} = {} ms",
-                        page, pageSize, status, userName, subscription, groupId, duration
-                );
+                log.info(LoggingAdviceConstants.REQUEST_TERMINATED,duration,"User retrieval request terminated");
+                MDC.clear();
             }
         }
 
@@ -187,12 +223,19 @@
         @PatchMapping("/{user_name}")
         public ResponseEntity<ApiResponse> updateUser(
                 @PathVariable("user_name") String userName,
-                @Valid @RequestBody UpdateUserRequest request) {
+                @Valid @RequestBody UpdateUserRequest request,HttpServletRequest httpServletRequest) throws JsonProcessingException {
 
             long startTime = System.currentTimeMillis();
 
             try {
-                UpdateUserResponse updateResponse = userProvisioningService.updateUser(userName, request);
+                MDC.put(LoggingAdviceConstants.REQUEST_ID, request.getRequestId());
+                MDC.put(LoggingAdviceConstants.USERNAME, userName);
+                MDC.put(LoggingAdviceConstants.TRACE_ID, httpServletRequest.getRequestId());
+                log.info(LoggingAdviceConstants.REQUEST_INITIATED,"PATCH",httpServletRequest.getRequestURI(),mapper.writeValueAsString(request));
+
+                UpdateUserResponse updateResponse =
+                        userProvisioningService.updateUser(userName, request);
+
                 return ResponseEntity.ok(
                         ApiResponse.success(
                                 request.getRequestId(),
@@ -201,30 +244,38 @@
                                 updateResponse
                         )
                 );
+
             } finally {
                 long duration = System.currentTimeMillis() - startTime;
-                log.info("Execution time for PATCH /{} = {} ms", userName, duration);
+                log.info(LoggingAdviceConstants.REQUEST_TERMINATED,duration,"User update request terminated");
+                MDC.clear();
             }
         }
-
-
-
 
         @LoggableAction
         @DeleteMapping(value = "/{user_name}", consumes = "application/json")
         public ResponseEntity<ApiResponse> deleteUser(
                 @PathVariable("user_name") String userName,
-                @Valid @RequestBody DeleteUserRequest request) {
+                @Valid @RequestBody DeleteUserRequest request,HttpServletRequest httpServletRequest) throws JsonProcessingException{
 
             long startTime = System.currentTimeMillis();
 
             try {
+                String requestId = request.getRequestId() != null
+                        ? request.getRequestId()
+                        : UUID.randomUUID().toString();
+
+                MDC.put(LoggingAdviceConstants.REQUEST_ID, requestId);
+                MDC.put(LoggingAdviceConstants.USERNAME, userName);
+                MDC.put(LoggingAdviceConstants.TRACE_ID, httpServletRequest.getRequestId());
+                log.info(LoggingAdviceConstants.REQUEST_INITIATED,"DELETE",httpServletRequest.getRequestURI(),mapper.writeValueAsString(request));
+
                 // Perform deletion
-                userProvisioningService.deleteUser(userName, request.getRequestId());
+                userProvisioningService.deleteUser(userName, requestId);
 
                 return ResponseEntity.ok(
                         ApiResponse.success(
-                                request.getRequestId(),
+                                requestId,
                                 "AAA_200_SUCCESS",
                                 "User " + userName + " has been deleted successfully.",
                                 null
@@ -233,7 +284,8 @@
 
             } finally {
                 long duration = System.currentTimeMillis() - startTime;
-                log.info("Execution time for DELETE /{} = {} ms", userName, duration);
+                log.info(LoggingAdviceConstants.REQUEST_TERMINATED,duration,"User delete request terminated");
+                MDC.clear();
             }
         }
 
@@ -245,11 +297,21 @@
                 @PathVariable("group_id") String groupId,
                 @RequestParam(value = "page", required = false, defaultValue = "1") Integer page,
                 @RequestParam(value = "page_size", required = false, defaultValue = "50") Integer pageSize,
-                @RequestParam(value = "status", required = false) Integer status) {
+                @RequestParam(value = "status", required = false) Integer status,
+                HttpServletRequest httpServletRequest) {
 
             long startTime = System.currentTimeMillis();
 
             try {
+                MDC.put(LoggingAdviceConstants.TRACE_ID,httpServletRequest.getRequestId());
+                MDC.put("groupId", groupId);
+                MDC.put("page", String.valueOf(page));
+                MDC.put("pageSize", String.valueOf(pageSize));
+                if (status != null) {
+                    MDC.put("status", String.valueOf(status));
+                }
+                log.info(LoggingAdviceConstants.REQUEST_INITIATED,"GET",httpServletRequest.getRequestURI());
+
                 PagedGroupUsersResponse pagedResponse =
                         userProvisioningService.getUsersByGroupId(groupId, page, pageSize, status);
 
@@ -262,10 +324,8 @@
 
             } finally {
                 long duration = System.currentTimeMillis() - startTime;
-                log.info(
-                        "Execution time for GET /group/{}?page={}&pageSize={}&status={} = {} ms",
-                        groupId, page, pageSize, status, duration
-                );
+                log.info(LoggingAdviceConstants.REQUEST_TERMINATED,duration,"User retrieval by group ID request terminated");
+                MDC.clear();
             }
         }
 
@@ -284,22 +344,39 @@
                         regexp = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
                         message = "request_id must be a valid UUID format (e.g. 550e8400-e29b-41d4-a716-446655440000)"
                 ) String requestId,
-                @Valid @RequestBody UpdateRequestDTO updateDto) {
+                @Valid @RequestBody UpdateRequestDTO updateDto,HttpServletRequest httpServletRequest) throws JsonProcessingException{
 
-            log.info("Received service update request for user: {}, plan: {}, request: {}",
-                    userId, planId, requestId);
+            long startTime = System.currentTimeMillis();
 
-            UpdateResponseDTO response =
-                    serviceProvisioningService.updateService(userId, planId, requestId, updateDto);
+            try {
 
-            return ResponseEntity.ok(
-                    ApiResponse.success(
-                            requestId,
-                            "AAA_200_SUCCESS",
-                            "Service updated successfully",
-                            response
-                    )
-            );
+                String finalRequestId = (requestId != null && !requestId.isBlank())
+                        ? requestId
+                        : java.util.UUID.randomUUID().toString();
+
+
+                MDC.put(LoggingAdviceConstants.REQUEST_ID, finalRequestId);
+                MDC.put(LoggingAdviceConstants.USERNAME, userId);
+                MDC.put(LoggingAdviceConstants.PLAN_ID, planId);
+                log.info(LoggingAdviceConstants.REQUEST_INITIATED,"PATCH", httpServletRequest.getRequestURI(),mapper.writeValueAsString(updateDto));
+
+                UpdateResponseDTO response =
+                        serviceProvisioningService.updateService(userId, planId, finalRequestId, updateDto);
+
+                return ResponseEntity.ok(
+                        ApiResponse.success(
+                                finalRequestId,
+                                "AAA_200_SUCCESS",
+                                "Service updated successfully",
+                                response
+                        )
+                );
+
+            } finally {
+                long duration = System.currentTimeMillis() - startTime;
+                log.info(LoggingAdviceConstants.REQUEST_TERMINATED,duration,"User update request terminated");
+                MDC.clear();
+            }
         }
 
 
@@ -311,26 +388,53 @@
         public ResponseEntity<ApiResponse> deleteService(
                 @PathVariable("user_id") String userId,
                 @PathVariable("plan_id") String planId,
-                @PathVariable("request_id") @Pattern(
+                @PathVariable("request_id")
+                @Pattern(
                         regexp = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
                         message = "request_id must be a valid UUID format (e.g. 550e8400-e29b-41d4-a716-446655440000)"
-                ) String requestId) {
+                )
+                String requestId, HttpServletRequest httpServletRequest) {
 
-            log.info("Received service delete request for user: {}, plan: {}, request: {}",
-                    userId, planId, requestId);
+            long startTime = System.currentTimeMillis();
 
-            // Perform deletion
-            DeleteResponseDTO response =
-                    serviceProvisioningService.deleteService(userId, planId, requestId);
+            try {
 
-            return ResponseEntity.ok(
-                    ApiResponse.success(
-                            requestId,
-                            "AAA_200_SUCCESS",
-                            "Service deleted successfully",
-                            response
-                    )
-            );
+                MDC.put(LoggingAdviceConstants.REQUEST_ID, requestId);
+                MDC.put(LoggingAdviceConstants.USERNAME, userId);
+                MDC.put(LoggingAdviceConstants.PLAN_ID, planId);
+                log.info(LoggingAdviceConstants.REQUEST_INITIATED,"DELETE",httpServletRequest.getRequestURI());
+
+                DeleteResponseDTO response =
+                        serviceProvisioningService.deleteService(userId, planId, requestId);
+
+                return ResponseEntity.ok(
+                        ApiResponse.success(
+                                requestId,
+                                "AAA_200_SUCCESS",
+                                "Service deleted successfully",
+                                response
+                        )
+                );
+
+            } finally {
+                long duration = System.currentTimeMillis() - startTime;
+                log.info(LoggingAdviceConstants.REQUEST_TERMINATED,duration,"User delete request terminated");
+                MDC.clear();
+            }
+        }
+        @LoggableAction
+        @GetMapping("/status/counts")
+        public ResponseEntity<ApiResponse> getUserStatusCounts(HttpServletRequest httpServletRequest) {
+            long startTime = System.currentTimeMillis();
+            try {
+                MDC.put(LoggingAdviceConstants.TRACE_ID, httpServletRequest.getRequestId());
+                log.info(LoggingAdviceConstants.REQUEST_INITIATED, "GET", httpServletRequest.getRequestURI());
+                Map<String, Long> counts = userProvisioningService.getUserStatusCounts();
+                return ResponseEntity.ok(ApiResponse.success("User status counts retrieved", counts));
+            } finally {
+                log.info(LoggingAdviceConstants.REQUEST_TERMINATED, System.currentTimeMillis() - startTime, "User status counts request terminated");
+                MDC.clear();
+            }
         }
 
     }

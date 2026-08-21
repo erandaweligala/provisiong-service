@@ -16,6 +16,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpServletResponseWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
@@ -24,7 +25,9 @@ import org.springframework.web.util.ContentCachingRequestWrapper;
 import org.springframework.web.util.ContentCachingResponseWrapper;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.regex.Pattern;
@@ -32,6 +35,9 @@ import java.util.regex.Pattern;
 @Component
 @Slf4j
 public class ApiLoggingInterceptor implements HandlerInterceptor {
+
+    @Value("${action-log.opco}")
+    private String opcoName;
 
     private final ActionLogRepository actionLogRepository;
     private final ObjectMapper objectMapper;
@@ -42,6 +48,7 @@ public class ApiLoggingInterceptor implements HandlerInterceptor {
     private static final String CREATE = "CREATE";
     private static final Pattern UNDERSCORE_PATTERN = Pattern.compile("_");
     private static final Pattern CAMEL_CASE_PATTERN = Pattern.compile("(?<!^)([A-Z])");
+    private static final String START_TIME_ATTR = "requestStartTime";
 
     public ApiLoggingInterceptor(ActionLogRepository actionLogRepository,
                                   ObjectMapper objectMapper,
@@ -56,12 +63,21 @@ public class ApiLoggingInterceptor implements HandlerInterceptor {
     }
 
     @Override
+    public boolean preHandle(HttpServletRequest request,
+                             HttpServletResponse response,
+                             Object handler) {
+        request.setAttribute(START_TIME_ATTR, System.currentTimeMillis());
+        return true;
+    }
+
+    @Override
     public void afterCompletion(HttpServletRequest request,
                                 HttpServletResponse response,
                                 Object handler,
                                 Exception ex) {
 
         try {
+            Long endTime = System.currentTimeMillis();
 
             if (!(handler instanceof HandlerMethod handlerMethod)) {
                 return;
@@ -71,10 +87,21 @@ public class ApiLoggingInterceptor implements HandlerInterceptor {
                 return;
             }
 
+            Long startTime = (Long) request.getAttribute(START_TIME_ATTR);
+
+            long responseTimeMs = (startTime != null) ? endTime - startTime : -1L;
+
             ActionLog logEntity = new ActionLog();
             logEntity.setAction(toUserFriendlyText(handlerMethod.getMethod().getName()));
             logEntity.setDateTime(LocalDateTime.now());
             logEntity.setHttpStatus(String.valueOf(response.getStatus()));
+            logEntity.setResponseTime(responseTimeMs);
+            logEntity.setApplication(Constants.APPLICATION);
+            logEntity.setOpco(opcoName);
+            logEntity.setRequestStartTime(LocalDateTime.ofInstant(
+                    Instant.ofEpochMilli(startTime != null ? startTime : endTime), ZoneId.systemDefault()));
+            logEntity.setRequestEndTime(LocalDateTime.ofInstant(
+                    Instant.ofEpochMilli(endTime), ZoneId.systemDefault()));
 
             // Request parsing
             JsonNode requestJson = readRequestJson(request);
@@ -82,10 +109,12 @@ public class ApiLoggingInterceptor implements HandlerInterceptor {
             String requestId = extractValue(Constants.REQUEST_ID, requestJson, request);
             String username  = extractValue(Constants.USERNAME, requestJson, request);
             String groupId   = extractValue(Constants.GROUP_ID, requestJson, request);
+            String channel = extractValue(Constants.CHANNEL, requestJson , request);
 
             logEntity.setRequestId(requestId);
             logEntity.setUserName(username);
             logEntity.setGroupId(groupId);
+            logEntity.setChannel(channel);
 
             // Response parsing
             JsonNode responseJson = readResponseJson(response);
@@ -195,6 +224,8 @@ public class ApiLoggingInterceptor implements HandlerInterceptor {
                 return pathVars.get(key);
             } else if (key.equals(Constants.USERNAME) && pathVars != null && pathVars.containsKey(Constants.USER_ID)) {
                 return pathVars.get(Constants.USER_ID);
+            } else if (key.equalsIgnoreCase(Constants.CHANNEL)) {
+                return request.getHeader(Constants.CHANNEL);
             }
         } catch (Exception e) {
             log.debug("Failed to extract path variable {}", key);

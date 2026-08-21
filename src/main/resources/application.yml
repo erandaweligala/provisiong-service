@@ -41,18 +41,12 @@ app:
       notification: dc-provisioning
       db-write: dc-provisioning
 
-    # Must be > max expected pod replica count.
-    # Each pod owns one partition: pod-N → partition (N % reply.partitions).
-    # If partitions < pod count, ordinals wrap and two pods share a partition,
-    # causing the other pod's reply to be silently discarded (intermittent timeout).
-    reply:
-      partitions: 20
 
     publish:
-      timeout-ms: 10000
+      timeout-ms: 5000
       retry:
         enabled: true
-        max-attempts: 3
+        max-attempts: 2      #need to change in OCP
       require-both-ack: false
 
     verification: #need to change in OCP
@@ -100,8 +94,8 @@ springdoc:
 spring:
   datasource:
     url: jdbc:oracle:thin:@localhost:1521/XEPDB1
-    username: aaa_app
-    password: password123
+    username: myuser
+    password: mypassword
     driver-class-name: oracle.jdbc.OracleDriver
     hikari:
       maximum-pool-size: 50
@@ -210,7 +204,7 @@ kafka:  #need to change in OCP
 # Cache API Configuration
 cache:
   api:
-    base-url: http://airtel-aaa-accounting-management-service-service.airtel-aaa.svc.cluster.local:9905/api/v1/cache/addBucket/{bucketUsername}
+    base-url: http://airtel-aaa-accounting-management-service-service.airtel-aaa.svc.cluster.local:9905/api/v1/cache/addBucketList/{bucketUsername}
     connect-timeout: 5000         # Connection timeout in milliseconds
     read-timeout: 10              # Read timeout in seconds
     write-timeout: 10             # Write timeout in seconds
@@ -251,18 +245,26 @@ thread:
   count:
     dbapiexecutor: 50
 
-#management:
-#  endpoints:
-#    web:
-#      base-path: /actuator
-#      exposure:
-#        include: "*"
-#      path-mapping:
-#        prometheus: prometheus
-#  endpoint:
-#    prometheus:
-#      enabled: true
-#  metrics:
-#    export:
-#      prometheus:
-#        enabled: true
+management:
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        include: "*"
+  endpoint:
+    prometheus:
+      enabled: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+action-log:
+  opco: test-env
+
+ip-ping:
+  udp-ports: 3799,1812,1813
+
+radius:
+  server:
+    base-url: http://airtel-aaa-radius-server-service.csg-aaa-app.cluster.local:8080

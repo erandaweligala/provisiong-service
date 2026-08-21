@@ -84,7 +84,7 @@ public class BngController {
      *
      * @param bngId Filter by BNG ID (partial match, case-insensitive)
      * @param bngName Filter by BNG Name (partial match, case-insensitive)
-     * @param bngIp Filter by BNG IP (partial match, case-insensitive)
+     * @param nasIpAddress Filter by BNG IP (partial match, case-insensitive)
      * @param status Filter by Status (exact match, case-insensitive)
      * @param page Page number (default: 0)
      * @param size Page size (default: 10)
@@ -96,7 +96,7 @@ public class BngController {
     public ResponseEntity<ApiResponse> searchBng(
             @RequestParam(required = false) String bngId,
             @RequestParam(required = false) String bngName,
-            @RequestParam(required = false) String bngIp,
+            @RequestParam(required = false) String nasIpAddress,
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "1") Integer page,
             @RequestParam(defaultValue = "20") Integer size,
@@ -106,7 +106,7 @@ public class BngController {
         BngFilterRequest filter = BngFilterRequest.builder()
                 .bngId(bngId)
                 .bngName(bngName)
-                .bngIp(bngIp)
+                .nasIpAddress(nasIpAddress)
                 .status(status)
                 .page(page)
                 .size(size)
@@ -189,13 +189,25 @@ public class BngController {
         String status = pingService.ping(request.getBngId());
 
         return switch (status) {
+            case "INVALID_REQUEST" ->
+                    ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                            .body(new ApiResponse(false, "Invalid BNG ID format", status));
+
+            case "RATE_LIMITED" ->
+                    ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                            .body(new ApiResponse(false, "Too many ping requests for this BNG. Please wait before retrying.", status));
+
+            case "TOO_MANY_REQUESTS" ->
+                    ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                            .body(new ApiResponse(false, "Server is busy processing other ping requests. Try again shortly.", status));
+
             case "NOT_FOUND" ->
                     ResponseEntity.status(HttpStatus.NOT_FOUND)
                             .body(new ApiResponse(false, "BNG not found: " + request.getBngId(), status));
 
             case "INVALID_IP" ->
                     ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
-                            .body(new ApiResponse(false, "NAS IP is invalid, a domain name, or a loopback address", status));
+                            .body(new ApiResponse(false, "NAS IP is invalid, not allowlisted, or a loopback address", status));
 
             default -> {
                 String message = "SUCCESS".equals(status) ? "Ping SUCCESS" : "Ping FAILED";

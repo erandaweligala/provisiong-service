@@ -53,7 +53,7 @@ class ActionLogServiceTest {
         // Act
         PagedActionLogResponse resp = actionLogService.getActionLogs(
                 null, null, null, null, null, null, null, null,
-                LocalDateTime.now().minusDays(1), LocalDateTime.now(), page, limit
+                LocalDateTime.now().minusDays(1), LocalDateTime.now(), null ,page, limit
         );
 
         // Assert
@@ -78,7 +78,7 @@ class ActionLogServiceTest {
         // Act
         PagedActionLogResponse resp = actionLogService.getActionLogs(
                 "ACTION", "GID", "REQ", "user", "RC", "200", "desc", true,
-                null, null, page, limit
+                null, null, null, page, limit
         );
 
         // Assert
@@ -98,7 +98,7 @@ class ActionLogServiceTest {
 
         // Act & Assert
         AAAException ex = assertThrows(AAAException.class, () ->
-                actionLogService.getActionLogs(null, null, null, null, null, null, null, null, null, null, page, limit)
+                actionLogService.getActionLogs(null, null, null, null, null, null, null, null, null, null, null ,page, limit)
         );
 
         assertNotNull(ex);

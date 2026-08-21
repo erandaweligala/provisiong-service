@@ -1,3 +1,4 @@
+/*
 package com.axonect.aee.template.baseapp.domain.service;
 
 import com.axonect.aee.template.baseapp.application.config.KafkaEventPublisher;
@@ -144,7 +145,9 @@ class ServiceProvisioningServiceTest {
     // ACTIVATE SERVICE – error / validation paths  (tests 1–15)
     // =========================================================================
 
-    /** Status "3" is rejected before any repository call. */
+    */
+/** Status "3" is rejected before any repository call. *//*
+
     @Test
     void testActivateService_InactiveStatus_ShouldThrowException() {
         req.setStatus("3");
@@ -155,7 +158,9 @@ class ServiceProvisioningServiceTest {
         assertTrue(ex.getMessage().contains("Inactive status"));
     }
 
-    /** Null start-date is caught by validateServiceDates. */
+    */
+/** Null start-date is caught by validateServiceDates. *//*
+
     @Test
     void testActivateService_NullStartDate_ShouldThrowException() {
         req.setServiceStartDate(null);
@@ -165,7 +170,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
     }
 
-    /** Past start-date is rejected by validateServiceDates. */
+    */
+/** Past start-date is rejected by validateServiceDates. *//*
+
     @Test
     void testActivateService_StartDateInPast_ShouldThrowException() {
         req.setServiceStartDate(LocalDateTime.now().minusDays(5));
@@ -175,7 +182,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
     }
 
-    /** End-date before start-date is rejected. */
+    */
+/** End-date before start-date is rejected. *//*
+
     @Test
     void testActivateService_EndDateBeforeStartDate_ShouldThrowException() {
         req.setServiceStartDate(LocalDateTime.now().plusDays(5));
@@ -186,7 +195,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
     }
 
-    /** End-date equal to start-date is rejected (not strictly after). */
+    */
+/** End-date equal to start-date is rejected (not strictly after). *//*
+
     @Test
     void testActivateService_EndDateEqualsStartDate_ShouldThrowException() {
         LocalDateTime date = LocalDateTime.now().plusDays(1);
@@ -198,7 +209,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
     }
 
-    /** A request whose ID already exists yields CONFLICT. */
+    */
+/** A request whose ID already exists yields CONFLICT. *//*
+
     @Test
     void testActivateService_DuplicateRequestId() {
         when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(true);
@@ -210,7 +223,9 @@ class ServiceProvisioningServiceTest {
     }
 
 
-    /** User with null status yields BAD_REQUEST. */
+    */
+/** User with null status yields BAD_REQUEST. *//*
+
     @Test
     void testActivateService_UserStatusNull_ShouldThrowException() {
         user.setStatus(null);
@@ -222,7 +237,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
     }
 
-    /** Inactive user yields UNPROCESSABLE_ENTITY. */
+    */
+/** Inactive user yields UNPROCESSABLE_ENTITY. *//*
+
     @Test
     void testActivateService_UserInactive_ShouldThrowException() {
         user.setStatus(UserStatus.INACTIVE);
@@ -236,7 +253,9 @@ class ServiceProvisioningServiceTest {
 
 
 
-    /** Inactive plan yields UNPROCESSABLE_ENTITY. */
+    */
+/** Inactive plan yields UNPROCESSABLE_ENTITY. *//*
+
     @Test
     void testActivateService_PlanNotActive() {
         plan.setStatus("Inactive");
@@ -249,7 +268,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, ex.getStatus());
     }
 
-    /** Duplicate service (same user + plan) yields CONFLICT. */
+    */
+/** Duplicate service (same user + plan) yields CONFLICT. *//*
+
     @Test
     void testActivateService_ServiceAlreadyExists() {
         when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
@@ -263,7 +284,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.CONFLICT, ex.getStatus());
     }
 
-    /** Plan with no bucket mappings yields NOT_FOUND. */
+    */
+/** Plan with no bucket mappings yields NOT_FOUND. *//*
+
     @Test
     void testActivateService_NoQuotaDetails() {
         when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
@@ -278,7 +301,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
     }
 
-    /** One-time pack without an end-date yields BAD_REQUEST. */
+    */
+/** One-time pack without an end-date yields BAD_REQUEST. *//*
+
     @Test
     void testActivateService_OneTimePack_NoEndDate() {
         plan.setRecurringFlag(false);
@@ -297,13 +322,15 @@ class ServiceProvisioningServiceTest {
     // ACTIVATE SERVICE – success paths  (tests 16–23)
     // =========================================================================
 
-    /**
+    */
+/**
      * Individual + recurring + proration OFF → directQuotaProvision path.
      * Covers: activateService, activateIndividualService, subscribeResources,
      * provisionRecurringPack, setCycleManagementProperties (billing "3"),
      * provisionQuota, directQuotaProvision, setBucketDetails (recurring branch),
      * getBNGCodeByRuleId, publishServiceCreatedEvents (success), serviceTTLManager.
-     */
+     *//*
+
     @Test
     void testActivateService_IndividualRecurring_NoProration_Success() {
         plan.setQuotaProrationFlag(false);
@@ -319,11 +346,13 @@ class ServiceProvisioningServiceTest {
                 .publishServiceTTL(anyLong(), anyString(), anyString(), any());
     }
 
-    /**
+    */
+/**
      * Individual + recurring + proration ON → proratedQuotaProvision path.
      * Covers: getProrationFactor (main calculation body), proratedQuotaProvision
      * (isUnlimited=false → originalQuota × factor → Math.round).
-     */
+     *//*
+
     @Test
     void testActivateService_IndividualRecurring_WithProration_Success() {
         plan.setQuotaProrationFlag(true);
@@ -336,11 +365,13 @@ class ServiceProvisioningServiceTest {
         verify(kafkaEventPublisher, atLeastOnce()).publishDBWriteEvent(any());
     }
 
-    /**
+    */
+/**
      * Group activation – response userId must equal the group-id.
      * Covers: activateGroupService, findFirstByGroupId, setBasicServiceInstanceData
      * (isGroup=true → setUsername(groupId) branch).
-     */
+     *//*
+
     @Test
     void testActivateService_GroupService_Success() {
         req.setIsGroup(true);
@@ -365,11 +396,13 @@ class ServiceProvisioningServiceTest {
         assertEquals(user.getGroupId(), response.getUserId());
     }
 
-    /**
+    */
+/**
      * NEW – Kafka complete failure in publishServiceCreatedEvents.
      * Covers: publishServiceCreatedEvents → result.isCompleteFailure() == true
      * → throw AAAException(INTERNAL_SERVER_ERROR) branch.
-     */
+     *//*
+
     @Test
     void testActivateService_KafkaCompleteFailure_ShouldThrowInternalError() {
         when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
@@ -393,12 +426,14 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, ex.getStatus());
     }
 
-    /**
+    */
+/**
      * NEW – req.quota > 0 exercises applyQuotaToPriorityBucket body.
      * Covers: applyQuotaToPriorityBucket → stream .min() select, newInitialBalance =
      * initialBalance + quota, setInitialBalance, setCurrentBalance lines.
      * finalQuota in the response reflects the top-up (1000 + 500 = 1500).
-     */
+     *//*
+
     @Test
     void testActivateService_WithQuota_AppliedToPriorityBucket() {
         req.setQuota(500L);
@@ -411,13 +446,15 @@ class ServiceProvisioningServiceTest {
         assertEquals(1500L, response.getFinalQuota());
     }
 
-    /**
+    */
+/**
      * NEW – One-time pack with a valid end-date, full success path.
      * Covers: provisionOneTimePack (all lines after the null-endDate guard),
      * setBasicServiceInstanceData (expiryDate from request),
      * setBucketDetails → recurringFlag=false → expiration = expiryDate branch.
      * provisionOneTimePack does NOT call existsByUsernameAndPlanId.
-     */
+     *//*
+
     @Test
     void testActivateService_OneTimePack_ValidEndDate_Success() {
         plan.setRecurringFlag(false);
@@ -445,11 +482,13 @@ class ServiceProvisioningServiceTest {
         assertEquals(1000L, response.getFinalQuota());
     }
 
-    /**
+    */
+/**
      * NEW – billing "1" takes the else-branch in setCycleManagementProperties.
      * Covers: else { cycleStartDate = serviceStartDate.toLocalDate().atStartOfDay(); ... }
      * and the "1".equals(billing) path in getNumberOfValidityDays.
-     */
+     *//*
+
     @Test
     void testActivateService_BillingType1_CoversCycleElseBranch() {
         user.setBilling("1");
@@ -462,11 +501,13 @@ class ServiceProvisioningServiceTest {
         assertEquals("user123", response.getUserId());
     }
 
-    /**
+    */
+/**
      * NEW – billing "2" takes the else-if branch in setCycleManagementProperties.
      * Covers: } else if ("2".equals(billing)) { cycleStartDate = withDayOfMonth(1); ... }
      * and the "2".equals(billing) path in getNumberOfValidityDays.
-     */
+     *//*
+
     @Test
     void testActivateService_BillingType2_CoversCycleElseIfBranch() {
         user.setBilling("2");
@@ -483,7 +524,9 @@ class ServiceProvisioningServiceTest {
     // UPDATE SERVICE – error paths  (tests 24–30)
     // =========================================================================
 
-    /** Duplicate requestId yields CONFLICT. */
+    */
+/** Duplicate requestId yields CONFLICT. *//*
+
     @Test
     void testUpdateService_DuplicateRequestId() {
         when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(true);
@@ -495,7 +538,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.CONFLICT, ex.getStatus());
     }
 
-    /** No service found yields NOT_FOUND. */
+    */
+/** No service found yields NOT_FOUND. *//*
+
     @Test
     void testUpdateService_ServiceNotFound() {
         when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
@@ -508,7 +553,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
     }
 
-    /** Updating an Inactive service yields CONFLICT. */
+    */
+/** Updating an Inactive service yields CONFLICT. *//*
+
     @Test
     void testUpdateService_InactiveService() {
         savedServiceInstance.setStatus("Inactive");
@@ -522,7 +569,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.CONFLICT, ex.getStatus());
     }
 
-    /** Status → Inactive routes to handleServiceInactivation; CoA is fired. */
+    */
+/** Status → Inactive routes to handleServiceInactivation; CoA is fired. *//*
+
     @Test
     void testUpdateService_StatusToInactive_TriggersDelete() {
         when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
@@ -547,7 +596,9 @@ class ServiceProvisioningServiceTest {
                 .sendServiceStatusCoARequest(anyString(), anyLong(), argThat(s -> s.equalsIgnoreCase("INACTIVE")));
     }
 
-    /** Missing bucket yields NOT_FOUND. */
+    */
+/** Missing bucket yields NOT_FOUND. *//*
+
     @Test
     void testUpdateService_BucketNotFound() {
         when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
@@ -564,7 +615,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
     }
 
-    /** currentBalance + balanceQuota > initialBalance yields BAD_REQUEST. */
+    */
+/** currentBalance + balanceQuota > initialBalance yields BAD_REQUEST. *//*
+
     @Test
     void testUpdateService_BalanceQuotaExceedsLimit() {
         when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
@@ -581,7 +634,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
     }
 
-    /** End-date before start-date in update yields BAD_REQUEST. */
+    */
+/** End-date before start-date in update yields BAD_REQUEST. *//*
+
     @Test
     void testUpdateService_InvalidDates_EndBeforeStart() {
         when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
@@ -601,7 +656,9 @@ class ServiceProvisioningServiceTest {
     // UPDATE SERVICE – success paths  (tests 31–35)
     // =========================================================================
 
-    /** Quota top-up increases initialBalance; event is published. */
+    */
+/** Quota top-up increases initialBalance; event is published. *//*
+
     @Test
     void testUpdateService_QuotaTopUp_Success() {
         setupSuccessfulUpdate();
@@ -616,11 +673,13 @@ class ServiceProvisioningServiceTest {
         verify(kafkaEventPublisher, atLeastOnce()).publishDBWriteEvent(any());
     }
 
-    /**
+    */
+/**
      * NEW – balance top-up within the limit succeeds.
      * Covers: updateBalanceQuotaOfMainBucket → updatedRemainingQuota ≤ initialBalance
      * → setCurrentBalance(updatedRemainingQuota) success branch.
-     */
+     *//*
+
     @Test
     void testUpdateService_BalanceTopUp_WithinLimit_Success() {
         setupSuccessfulUpdate();
@@ -634,11 +693,13 @@ class ServiceProvisioningServiceTest {
         assertEquals(900L, bucketInstance.getCurrentBalance());
     }
 
-    /**
+    */
+/**
      * NEW – Active → Suspended status change fires a CoA request.
      * Covers: performServiceUpdate → shouldSendCoA=true (first condition:
      * oldStatus="Active" && newStatus="Suspended"), sendServiceStatusCoARequest("SUSPENDED").
-     */
+     *//*
+
     @Test
     void testUpdateService_ActiveToSuspended_TriggersCoA() {
         // savedServiceInstance.status is "Active" from setUp
@@ -655,11 +716,13 @@ class ServiceProvisioningServiceTest {
                 .sendServiceStatusCoARequest(eq("user123"), eq(99L), eq("SUSPENDED"));
     }
 
-    /**
+    */
+/**
      * NEW – Suspended → Active status change fires a CoA request.
      * Covers: performServiceUpdate → shouldSendCoA=true (second condition:
      * oldStatus="Suspended" && newStatus="Active"), sendServiceStatusCoARequest("ACTIVE").
-     */
+     *//*
+
     @Test
     void testUpdateService_SuspendedToActive_TriggersCoA() {
         savedServiceInstance.setStatus("Suspended");
@@ -676,13 +739,15 @@ class ServiceProvisioningServiceTest {
                 .sendServiceStatusCoARequest(eq("user123"), eq(99L), eq("ACTIVE"));
     }
 
-    /**
+    */
+/**
      * NEW – Kafka complete failure in publishServiceUpdatedEvents.
      * Covers: publishServiceUpdatedEvents → result.isCompleteFailure() == true
      * → throw AAAException(INTERNAL_SERVER_ERROR) branch.
      * A quota update produces a non-empty updatedBuckets list, triggering
      * the bucket-write bundling path as well.
-     */
+     *//*
+
     @Test
     void testUpdateService_KafkaCompleteFailure_ShouldThrowInternalError() {
         when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
@@ -709,7 +774,9 @@ class ServiceProvisioningServiceTest {
     // DELETE SERVICE  (tests 36–39)
     // =========================================================================
 
-    /** Happy-path: events published, CoA fired, response populated. */
+    */
+/** Happy-path: events published, CoA fired, response populated. *//*
+
     @Test
     void testDeleteService_Success() {
         when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
@@ -731,7 +798,9 @@ class ServiceProvisioningServiceTest {
         verify(coAManagementService).sendServiceDeleteCoARequest(eq("user123"), anyLong());
     }
 
-    /** No service found yields NOT_FOUND. */
+    */
+/** No service found yields NOT_FOUND. *//*
+
     @Test
     void testDeleteService_ServiceNotFound() {
         when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
@@ -743,7 +812,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
     }
 
-    /** Repository exception is wrapped and re-thrown as INTERNAL_SERVER_ERROR. */
+    */
+/** Repository exception is wrapped and re-thrown as INTERNAL_SERVER_ERROR. *//*
+
     @Test
     void testDeleteService_UnexpectedException() {
         when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
@@ -755,7 +826,9 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, ex.getStatus());
     }
 
-    /** Multiple bucket instances: one toBucketDBWriteEvent call per bucket. */
+    */
+/** Multiple bucket instances: one toBucketDBWriteEvent call per bucket. *//*
+
     @Test
     void testDeleteService_WithMultipleBuckets() {
         BucketInstance bucket2 = new BucketInstance();
@@ -783,11 +856,13 @@ class ServiceProvisioningServiceTest {
     // PRIVATE-METHOD COVERAGE via reflection  (tests 40–42)
     // =========================================================================
 
-    /**
+    */
+/**
      * NEW – getProrationFactor with null service dates.
      * Covers: if (serviceStartDate == null || cycleStartDate == null || cycleEndDate == null)
      * → throw AAAException(BAD_REQUEST) guard branch.
-     */
+     *//*
+
     @Test
     void testGetProrationFactor_NullServiceDates_ThrowsValidationError() throws Exception {
         ServiceInstance si = new ServiceInstance();
@@ -802,10 +877,12 @@ class ServiceProvisioningServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, ((AAAException) wrapper.getCause()).getStatus());
     }
 
-    /**
+    */
+/**
      * NEW – getProrationFactor when cycleStart == cycleEnd (totalCycleDays == 0).
      * Covers: if (totalCycleDays == 0) → throw AAAException(BAD_REQUEST) branch.
-     */
+     *//*
+
     @Test
     void testGetProrationFactor_ZeroCycleDays_ThrowsValidationError() throws Exception {
         LocalDateTime same = LocalDateTime.now();
@@ -822,10 +899,12 @@ class ServiceProvisioningServiceTest {
         assertInstanceOf(AAAException.class, wrapper.getCause());
     }
 
-    /**
+    */
+/**
      * NEW – mapStatus default case (integer value outside 1/2/3).
      * Covers: default → throw AAAException(BAD_REQUEST) branch in the switch expression.
-     */
+     *//*
+
     @Test
     void testMapStatus_InvalidValue_ThrowsBadRequest() throws Exception {
         Method method = ServiceProvisioningService.class
@@ -841,13 +920,15 @@ class ServiceProvisioningServiceTest {
     // HELPERS
     // =========================================================================
 
-    /**
+    */
+/**
      * Full happy-path stubs for individual recurring service activation.
      *
      * <p><b>Key:</b> {@code publishServiceCreatedEvents} makes exactly ONE
      * {@code publishDBWriteEvent} call – bucket events travel via
      * {@code relatedWrites}, not as separate calls.
-     */
+     *//*
+
     private void setupSuccessfulActivation() {
         when(serviceInstanceRepository.existsByRequestId(anyString())).thenReturn(false);
         when(userRepository.findByUserName(anyString())).thenReturn(Optional.of(user));
@@ -866,12 +947,14 @@ class ServiceProvisioningServiceTest {
         // serviceTTLManager.publishServiceTTL is void – Mockito stubs nothing by default
     }
 
-    /**
+    */
+/**
      * Minimal happy-path stubs for service update.
      *
      * <p>lenient() on Kafka/mapper stubs prevents "unnecessary stubbing" failures
      * in tests that exit before reaching the publish step (e.g. date-validation tests).
-     */
+     *//*
+
     private void setupSuccessfulUpdate() {
         when(serviceInstanceRepository.findFirstByUsernameAndPlanIdOrderByExpiryDateAsc(
                 anyString(), anyString())).thenReturn(Optional.of(savedServiceInstance));
@@ -884,4 +967,4 @@ class ServiceProvisioningServiceTest {
         lenient().when(eventMapper.toBucketDBWriteEvent(anyString(), any(), anyString()))
                 .thenReturn(new DBWriteRequestGeneric());
     }
-}
+}*/

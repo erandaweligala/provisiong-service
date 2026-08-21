@@ -1,5 +1,6 @@
 package com.axonect.aee.template.baseapp.application.controller;
 
+import com.axonect.aee.template.baseapp.application.constants.LoggingAdviceConstants;
 import com.axonect.aee.template.baseapp.application.transport.request.entities.ActiveServiceRequestDTO;
 import com.axonect.aee.template.baseapp.application.transport.response.transformers.ActiveServiceResponseDTO;
 import com.axonect.aee.template.baseapp.application.transport.response.transformers.ApiResponse;
@@ -10,12 +11,16 @@ import com.axonect.aee.template.baseapp.domain.service.BucketInfoService;
 import com.axonect.aee.template.baseapp.domain.service.ServiceProvisioningService;
 import com.axonect.aee.template.baseapp.domain.util.LoggableAction;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -32,6 +37,7 @@ public class ServiceController {
 
     private final ServiceProvisioningService serviceProvisioningService;
     private final BucketInfoService bucketInfoService;
+    ObjectMapper objectMapper = new ObjectMapper();
 
     /**
      * Endpoint to activate a service for a given plan.
@@ -42,25 +48,40 @@ public class ServiceController {
     @LoggableAction
     @PostMapping("/activate")
     public ResponseEntity<ApiResponse> activateService(
-            @Valid @RequestBody ActiveServiceRequestDTO request) {
+            @Valid @RequestBody ActiveServiceRequestDTO request,
+            HttpServletRequest httpRequest) throws JsonProcessingException {
 
-        log.info("Received service activation request for Plan ID: {}", request.getPlanId());
+        long startTime = System.currentTimeMillis();
 
-        ActiveServiceResponseDTO response = serviceProvisioningService.activateService(request);
+        try {
 
-        return ResponseEntity.ok(
-                ApiResponse.success(
-                        request.getRequestId(),
-                        "AAA_200_SUCCESS",
-                        "Service activated successfully",
-                        response
-                )
-        );
+            String requestId = (request.getRequestId() != null && !request.getRequestId().isBlank())
+                    ? request.getRequestId()
+                    : java.util.UUID.randomUUID().toString();
+
+
+            MDC.put(LoggingAdviceConstants.REQUEST_ID, requestId);
+            MDC.put(LoggingAdviceConstants.PLAN_ID, request.getPlanId());
+            MDC.put(LoggingAdviceConstants.USERNAME,request.getUserId());
+            log.info(LoggingAdviceConstants.REQUEST_INITIATED,"POST",httpRequest.getRequestURI(),objectMapper.writeValueAsString(request));
+
+            ActiveServiceResponseDTO response = serviceProvisioningService.activateService(request);
+
+            return ResponseEntity.ok(
+                    ApiResponse.success(
+                            requestId,
+                            "AAA_200_SUCCESS",
+                            "Service activated successfully",
+                            response
+                    )
+            );
+
+        } finally {
+            long duration = System.currentTimeMillis() - startTime;
+            log.info(LoggingAdviceConstants.REQUEST_TERMINATED,duration,"Service Activated");
+            MDC.clear();
+        }
     }
-
-
-
-
 
     /**
      * Endpoint to retrieve bucket and speed details for a given service.
@@ -71,14 +92,21 @@ public class ServiceController {
      * @param serviceId The service identifier used to fetch associated bucket information.
      * @return ResponseEntity containing a BaseResponse with a list of BucketInfo objects.
      */
+    @LoggableAction
     @GetMapping("/bucket-info/{serviceId}")
-    public ResponseEntity<BaseResponse<List<BucketInfo>>> getBucketInfo(@PathVariable Long serviceId) {
+    public ResponseEntity<BaseResponse<List<BucketInfo>>> getBucketInfo(@PathVariable Long serviceId, HttpServletRequest httpRequest) {
+        long startTime = System.currentTimeMillis();
+        try {
+            MDC.put(LoggingAdviceConstants.TRACE_ID, httpRequest.getRequestId());
+            log.info(LoggingAdviceConstants.REQUEST_INITIATED, "GET", httpRequest.getRequestURI());
 
-        log.info("Received request to fetch bucket info for serviceId={}", serviceId);
+            BaseResponse<List<BucketInfo>> response = bucketInfoService.getBucketInfoByServiceId(serviceId);
 
-        BaseResponse<List<BucketInfo>> response = bucketInfoService.getBucketInfoByServiceId(serviceId);
-
-        return ResponseEntity.ok(response);
+            return ResponseEntity.ok(response);
+        } finally {
+            log.info(LoggingAdviceConstants.REQUEST_TERMINATED, System.currentTimeMillis() - startTime, "Bucket info retrieved");
+            MDC.clear();
+        }
     }
 
     /**
@@ -97,22 +125,34 @@ public class ServiceController {
      * @param pageSize       page size
      * @return BaseResponse containing paginated list of ServiceInfo
      */
+    @LoggableAction
     @GetMapping("/service-info/filter")
     public ResponseEntity<BaseResponse<List<ServiceInfo>>> getServiceInfo(
             @RequestParam String username,
             @RequestParam(required = false) String serviceId,
-            @RequestParam(required = false) String status,
+            @RequestParam(required = false, defaultValue = "Active" ) String status,
             @RequestParam(required = false) String planId,
             @RequestParam(required = false) String planType,
             @RequestParam(required = false) Boolean recurringFlag,
             @RequestParam(required = false) Boolean isGroup,
             @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "10") int pageSize) {
+            @RequestParam(defaultValue = "10") int pageSize,
+            HttpServletRequest httpRequest) {
 
-        BaseResponse<List<ServiceInfo>> response =
-                bucketInfoService.getServiceInfo(username, serviceId, status, planId, planType, recurringFlag, isGroup, page, pageSize);
+        long startTime = System.currentTimeMillis();
+        try {
+            MDC.put(LoggingAdviceConstants.TRACE_ID, httpRequest.getRequestId());
+            MDC.put(LoggingAdviceConstants.USERNAME, username);
+            log.info(LoggingAdviceConstants.REQUEST_INITIATED, "GET", httpRequest.getRequestURI());
 
-        return ResponseEntity.ok(response);
+            BaseResponse<List<ServiceInfo>> response =
+                    bucketInfoService.getServiceInfo(username, serviceId, status, planId, planType, recurringFlag, isGroup, page, pageSize);
+
+            return ResponseEntity.ok(response);
+        } finally {
+            log.info(LoggingAdviceConstants.REQUEST_TERMINATED, System.currentTimeMillis() - startTime, "Service info retrieved");
+            MDC.clear();
+        }
     }
 
 

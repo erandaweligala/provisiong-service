@@ -82,14 +82,14 @@ public class UserEntity {
     @Column(name = "CYCLE_DATE")
     private Integer cycleDate;
 
-    @Column(name = "CONTACT_NAME")
+/*    @Column(name = "CONTACT_NAME")
     private String contactName;
 
     @Column(name = "CONTACT_EMAIL")
     private String contactEmail;
 
     @Column(name = "CONTACT_NUMBER")
-    private String contactNumber;
+    private String contactNumber;*/
 
     @Column(name = "CONCURRENCY")
     private Integer concurrency;
@@ -106,6 +106,7 @@ public class UserEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "STATUS", nullable = false)
+    @Setter(AccessLevel.NONE)
     private UserStatus status;
     // Change from Integer to UserStatus
     /*
@@ -113,6 +114,8 @@ public class UserEntity {
         2 – Suspended
         3 – Inactive
      */
+    @Column(name = "STATUS_CHANGED_DATE")
+    private LocalDateTime statusChangedDate;
 
     @Column(name = "REQUEST_ID", nullable = false, unique = true)
     private String requestId;
@@ -130,10 +133,18 @@ public class UserEntity {
     @Column(name = "UPDATED_DATE")
     private LocalDateTime updatedDate;
 
+    public void setStatus(UserStatus status) {
+        this.status = status;
+        this.statusChangedDate = LocalDateTime.now();
+    }
+
     @PrePersist
     public void generateUserId() {
         if (this.userId == null || this.userId.isEmpty()) {
             this.userId = generateIncrementalRandomId();
+        }
+        if (this.statusChangedDate == null) {
+            this.statusChangedDate = LocalDateTime.now();
         }
     }
 

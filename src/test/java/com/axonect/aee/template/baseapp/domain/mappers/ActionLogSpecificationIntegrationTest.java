@@ -71,7 +71,7 @@ class ActionLogSpecificationIntegrationTest {
         // Act
         Specification<ActionLog> spec = ActionLogSpecifications.filterLogs(
                 "LOGIN", "G1", "REQ1", "john", "200X", "200",
-                "success", true, start, end
+                "success", true, start, end, null
         );
 
         Predicate result = spec.toPredicate(root, query, cb);
@@ -101,7 +101,7 @@ class ActionLogSpecificationIntegrationTest {
         // Act
         Specification<ActionLog> spec = ActionLogSpecifications.filterLogs(
                 null, null, null, null, null, null,
-                null, false, null, null
+                null, false, null, null, null
         );
 
         Predicate result = spec.toPredicate(root, query, cb);

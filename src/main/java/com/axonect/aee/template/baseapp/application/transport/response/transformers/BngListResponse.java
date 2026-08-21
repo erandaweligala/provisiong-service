@@ -12,4 +12,5 @@ import lombok.NoArgsConstructor;
 public class BngListResponse {
     private String bngName;
     private String bngIp;
+    private String bngId;
 }

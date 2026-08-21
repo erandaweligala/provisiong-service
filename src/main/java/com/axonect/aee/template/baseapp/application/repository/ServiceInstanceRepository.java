@@ -38,6 +38,7 @@ public interface ServiceInstanceRepository extends JpaRepository<ServiceInstance
                     "si.SERVICE_START_DATE AS serviceStartDate, " +
                     "si.CYCLE_START_DATE AS currentCycleStartDate, " +
                     "si.CYCLE_END_DATE AS currentCycleEndDate, " +
+                    "si.CYCLE_DATE AS cycleDate, " +
                     "si.IS_GROUP AS isGroup " +
                     "FROM SERVICE_INSTANCE si " +
                     "WHERE si.USERNAME IN (:usernames) " +
