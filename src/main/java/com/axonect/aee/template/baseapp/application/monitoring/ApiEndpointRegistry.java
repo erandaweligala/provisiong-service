@@ -41,11 +41,8 @@ public class ApiEndpointRegistry {
 
     private final Map<String, MonitoredEndpoint> byMethodAndUri;
     private final Map<String, MonitoredEndpoint> byName;
-    private final long defaultThresholdMs;
 
-    public ApiEndpointRegistry(List<MonitoredEndpoint> endpoints, long defaultThresholdMs) {
-        this.defaultThresholdMs = defaultThresholdMs;
-
+    public ApiEndpointRegistry(List<MonitoredEndpoint> endpoints) {
         Map<String, MonitoredEndpoint> uriIndex = new HashMap<>();
         Map<String, MonitoredEndpoint> nameIndex = new LinkedHashMap<>();
 
@@ -96,22 +93,6 @@ public class ApiEndpointRegistry {
      */
     public String tagFor(String method, String templatedUri) {
         return find(method, templatedUri).map(MonitoredEndpoint::getName).orElse(UNMATCHED);
-    }
-
-    /**
-     * @return the response time budget of the endpoint, falling back to the
-     * catalog-wide default.
-     */
-    public long thresholdMsFor(MonitoredEndpoint endpoint) {
-        Long threshold = endpoint.getThresholdMs();
-        return threshold == null ? defaultThresholdMs : threshold;
-    }
-
-    /**
-     * @return the catalog entry published under the given {@code api} metric tag.
-     */
-    public Optional<MonitoredEndpoint> findByName(String name) {
-        return name == null ? Optional.empty() : Optional.ofNullable(byName.get(name));
     }
 
     /**

@@ -1,4 +1,4 @@
-# Prometheus / Thanos alerting rules for the REST endpoints published by
+# Prometheus / Thanos alerting rules for REST endpoint availability of
 # airtel-aaa-user-provisioning-service.
 #
 # Apply as a PrometheusRule on OpenShift:
@@ -41,40 +41,11 @@ spec:
               rate(http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api!="other"}[5m])
             )
 
-        # Share of requests that answered inside the endpoint's own response
-        # time budget.
-        - record: api:within_threshold_ratio:rate5m
-          expr: |
-            1 - (
-              (
-                sum by (microservice, api) (
-                  rate(api_requests_over_threshold_total{microservice="airtel-aaa-user-provisioning-service", api!="other"}[5m])
-                )
-                or
-                sum by (microservice, api) (
-                  rate(http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api!="other"}[5m])
-                ) * 0
-              )
-              /
-              sum by (microservice, api) (
-                rate(http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api!="other"}[5m])
-              )
-            )
-
-        - record: api:latency_seconds:p95_rate5m
-          expr: |
-            histogram_quantile(
-              0.95,
-              sum by (microservice, api, le) (
-                rate(http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api!="other"}[5m])
-              )
-            )
-
     - name: user-provisioning-endpoint-alerts
       rules:
         - alert: UserProvisioningNoMetrics
           expr: |
-            absent(api_endpoint_threshold_milliseconds{microservice="airtel-aaa-user-provisioning-service"})
+            absent(api_endpoint_info{microservice="airtel-aaa-user-provisioning-service"})
           for: 5m
           labels:
             severity: critical
@@ -82,8 +53,8 @@ spec:
           annotations:
             summary: No endpoint metrics from the user provisioning service
             description: >-
-              Nothing is publishing api_endpoint_threshold_milliseconds. Either every pod is down or
-              the scrape is broken - check the ServiceMonitor and curl /actuator/prometheus on a pod.
+              Nothing is publishing api_endpoint_info. Either every pod is down or the scrape is
+              broken - check the ServiceMonitor and curl /actuator/prometheus on a pod.
               While this fires, none of the other endpoint alerts can fire, so treat it as an outage.
 
         - alert: UserProvisioningEndpointErrorRateHigh
@@ -107,47 +78,3 @@ spec:
             summary: '{{ $labels.api }} availability is {{ $value | humanizePercentage }}'
             description: >-
               More than 5% of requests to {{ $labels.api }} answered 5xx over the last 5 minutes.
-
-        # Compares each endpoint's p95 against the threshold it publishes, so the
-        # numbers here follow application.yml and never drift from it.
-        - alert: UserProvisioningEndpointP95OverThreshold
-          expr: |
-            api:latency_seconds:p95_rate5m
-              > on (microservice, api)
-            (max by (microservice, api) (api_endpoint_threshold_milliseconds{microservice="airtel-aaa-user-provisioning-service"}) / 1000)
-          for: 10m
-          labels:
-            severity: warning
-            service: airtel-aaa-user-provisioning-service
-          annotations:
-            summary: '{{ $labels.api }} p95 is {{ $value | humanizeDuration }}, over its threshold'
-            description: >-
-              The 95th percentile response time of {{ $labels.api }} has been above its configured
-              response time threshold for 10 minutes.
-
-        - alert: UserProvisioningEndpointBreachingThresholdOften
-          expr: api:within_threshold_ratio:rate5m < 0.95
-          for: 10m
-          labels:
-            severity: warning
-            service: airtel-aaa-user-provisioning-service
-          annotations:
-            summary: '{{ $labels.api }} met its response time budget only {{ $value | humanizePercentage }} of the time'
-            description: >-
-              More than 5% of requests to {{ $labels.api }} took longer than the endpoint's configured
-              response time threshold.
-
-        # Only fires where monitoring.api.probe.enabled is true; without the
-        # probe the series does not exist and the alert stays silent.
-        - alert: UserProvisioningEndpointProbeDown
-          expr: max by (microservice, api) (api_endpoint_up{microservice="airtel-aaa-user-provisioning-service"}) == 0
-          for: 3m
-          labels:
-            severity: critical
-            service: airtel-aaa-user-provisioning-service
-          annotations:
-            summary: 'Synthetic probe of {{ $labels.api }} is failing on every pod'
-            description: >-
-              No instance has had a successful synthetic probe of {{ $labels.api }} for 3 minutes.
-              Unlike the error rate alerts this one does not need live traffic, so it fires during
-              quiet hours too.
