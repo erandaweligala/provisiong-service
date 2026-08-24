@@ -16,7 +16,7 @@ class ApiNameObservationConventionTest {
 
     private static final ApiEndpointRegistry REGISTRY = new ApiEndpointRegistry(List.of(
             endpoint("get_user", "GET", "/api/user/{user_name}"),
-            endpoint("create_user", "POST", "/api/user")), 2000L);
+            endpoint("create_user", "POST", "/api/user")));
 
     private final ApiNameObservationConvention convention = new ApiNameObservationConvention(REGISTRY);
 

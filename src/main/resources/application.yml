@@ -271,32 +271,16 @@ radius:
 # ---------------------------------------------------------------------------
 # REST endpoint availability monitoring (Grafana)
 #
-# Each entry becomes an `api` tag on http_server_requests, which is what the
-# Grafana dashboard in monitoring/grafana groups by. `uris` must hold the
+# Each entry becomes an `api` tag on http_server_requests, and availability is
+# the share of those requests that did not answer 5xx. `uris` must hold the
 # Spring URI templates of the handler - path variable names are ignored when
 # matching, but the path structure must be exact, so keep this list in step
 # with the controllers.
-#
-# threshold-ms is the "Response Time Threshold" column of the API sheet; it
-# defaults to default-threshold-ms when omitted.
 # ---------------------------------------------------------------------------
 monitoring:
   api:
     enabled: true
     microservice: airtel-aaa-user-provisioning-service
-    default-threshold-ms: 2000
-    # Full percentile histograms give smoother quantiles but roughly 5x the
-    # series count; the explicit buckets below are enough for the dashboard.
-    percentiles-histogram: false
-
-    # Active checks. Disabled by default: enabling it makes the pod issue real
-    # HTTP calls, so only endpoints with a probe-path are ever called and only
-    # GETs are allowed. See monitoring/README.md before switching this on.
-    probe:
-      enabled: false
-      base-url: http://localhost:8089
-      interval: 60s
-      timeout: 5s
 
     endpoints:
       - name: create_user
