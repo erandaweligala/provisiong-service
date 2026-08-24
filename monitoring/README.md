@@ -16,7 +16,8 @@ Spring MVC request
 
 | File | Purpose |
 | --- | --- |
-| `grafana/user-provisioning-endpoint-availability.json` | The dashboard. Import into Grafana. |
+| `grafana/user-provisioning-endpoint-availability.json` | The full dashboard: availability, error rate, latency vs threshold, status mix, synthetic probe. |
+| `grafana/endpoint-availability-simple.json` | Just "is it up": one overall availability number and one line per endpoint. Import this instead if the full dashboard is more than you need. |
 | `prometheus/servicemonitor.yaml` | Makes the Prometheus Operator scrape the pods. |
 | `prometheus/user-provisioning-endpoint-rules.yaml` | Recording rules and alerts. |
 
@@ -66,9 +67,10 @@ oc -n airtel-aaa apply -f prometheus/user-provisioning-endpoint-rules.yaml
 ```
 
 **4. Dashboard.** Grafana -> Dashboards -> New -> Import -> upload
-`grafana/user-provisioning-endpoint-availability.json`, then pick the Prometheus
-data source. Its UID is a dashboard variable, so the JSON is not tied to any one
-Grafana instance.
+`grafana/user-provisioning-endpoint-availability.json` (the full dashboard) or
+`grafana/endpoint-availability-simple.json` (just the availability number, if
+that is all you need), then pick the Prometheus data source. Its UID is a
+dashboard variable, so neither JSON is tied to any one Grafana instance.
 
 ## Reading the dashboard
 
