@@ -1,0 +1,93 @@
+# promtool unit test for the availability recording rule and its alerts.
+#
+# It pins down the four cases that matter, in particular the two that used to
+# come back empty instead of a number:
+#
+#   create_user    traffic, and not one 5xx series in Prometheus -> 100%
+#   get_user       6 of every 60 requests answer 5xx             ->  90%
+#   delete_user    every request answers 5xx                     ->   0%
+#   idle_endpoint  no request series at all                      -> 100%
+#
+# The rules ship as a PrometheusRule custom resource, which promtool cannot read
+# directly, so extract the spec first:
+#
+#   python3 -c "import yaml,sys; \
+#     yaml.safe_dump(yaml.safe_load(open('user-provisioning-endpoint-rules.yaml'))['spec'], \
+#                    open('rules.yaml','w'), sort_keys=False)"
+#   promtool test rules user-provisioning-endpoint-rules_test.yaml
+#   rm rules.yaml
+rule_files:
+  - rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      # The catalog: four endpoints, published from startup regardless of traffic.
+      - series: 'api_endpoint_info{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", title="Create user"}'
+        values: '1+0x15'
+      - series: 'api_endpoint_info{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", title="Get user"}'
+        values: '1+0x15'
+      - series: 'api_endpoint_info{microservice="airtel-aaa-user-provisioning-service", api="delete_user", method="DELETE", title="Delete user"}'
+        values: '1+0x15'
+      - series: 'api_endpoint_info{microservice="airtel-aaa-user-provisioning-service", api="idle_endpoint", method="GET", title="Idle"}'
+        values: '1+0x15'
+
+      # create_user: healthy, 60 req/min all 200 - and NOT A SINGLE 5xx series.
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="create_user", status="200"}'
+        values: '0+60x15'
+
+      # get_user: 60 req/min, 6 of them 5xx -> 90% available.
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="get_user", status="200"}'
+        values: '0+54x15'
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="get_user", status="500"}'
+        values: '0+6x15'
+
+      # delete_user: totally broken, every response 5xx -> 0% available.
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="delete_user", status="503"}'
+        values: '0+60x15'
+
+      # idle_endpoint: no request series at all.
+
+      # Uncatalogued traffic must never reach the figures.
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="other", status="500"}'
+        values: '0+600x15'
+
+    promql_expr_test:
+      - expr: api:availability_ratio:rate5m
+        eval_time: 10m
+        exp_samples:
+          - labels: '{__name__="api:availability_ratio:rate5m", microservice="airtel-aaa-user-provisioning-service", api="create_user"}'
+            value: 1
+          - labels: '{__name__="api:availability_ratio:rate5m", microservice="airtel-aaa-user-provisioning-service", api="get_user"}'
+            value: 0.9
+          - labels: '{__name__="api:availability_ratio:rate5m", microservice="airtel-aaa-user-provisioning-service", api="delete_user"}'
+            value: 0
+          - labels: '{__name__="api:availability_ratio:rate5m", microservice="airtel-aaa-user-provisioning-service", api="idle_endpoint"}'
+            value: 1
+
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UserProvisioningEndpointAvailabilityCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: airtel-aaa-user-provisioning-service
+              api: get_user
+              microservice: airtel-aaa-user-provisioning-service
+            exp_annotations:
+              summary: 'get_user availability is 90%'
+              description: 'More than 5% of requests to get_user answered 5xx over the last 5 minutes.'
+          - exp_labels:
+              severity: critical
+              service: airtel-aaa-user-provisioning-service
+              api: delete_user
+              microservice: airtel-aaa-user-provisioning-service
+            exp_annotations:
+              summary: 'delete_user availability is 0%'
+              description: 'More than 5% of requests to delete_user answered 5xx over the last 5 minutes.'
+
+      - eval_time: 10m
+        alertname: UserProvisioningNoMetrics
+        exp_alerts: []

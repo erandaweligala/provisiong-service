@@ -13,7 +13,6 @@ package com.axonect.aee.template.baseapp.application.monitoring;
 
 import io.micrometer.common.KeyValue;
 import io.micrometer.common.KeyValues;
-import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.server.observation.DefaultServerRequestObservationConvention;
 import org.springframework.http.server.observation.ServerRequestObservationContext;
 
@@ -31,7 +30,7 @@ public class ApiNameObservationConvention extends DefaultServerRequestObservatio
 
     static final String API_TAG = "api";
 
-    /** Low cardinality key holding the templated request path. */
+    private static final String METHOD_TAG = "method";
     private static final String URI_TAG = "uri";
 
     private final ApiEndpointRegistry registry;
@@ -40,26 +39,23 @@ public class ApiNameObservationConvention extends DefaultServerRequestObservatio
         this.registry = registry;
     }
 
+    /**
+     * Reads the method and templated URI back off the tags the default
+     * convention just produced, rather than re-deriving them from the request.
+     * That keeps this convention in step with however Spring chose to template -
+     * or redact, for unmapped and redirected requests - the path, and means an
+     * observation with no request behind it simply lands on {@code other}.
+     */
     @Override
     public KeyValues getLowCardinalityKeyValues(ServerRequestObservationContext context) {
         KeyValues keyValues = super.getLowCardinalityKeyValues(context);
-        return keyValues.and(KeyValue.of(API_TAG, registry.tagFor(httpMethod(context), uri(keyValues))));
+        String api = registry.tagFor(valueOf(keyValues, METHOD_TAG), valueOf(keyValues, URI_TAG));
+        return keyValues.and(KeyValue.of(API_TAG, api));
     }
 
-    private String httpMethod(ServerRequestObservationContext context) {
-        HttpServletRequest request = context.getCarrier();
-        return request == null ? null : request.getMethod();
-    }
-
-    /**
-     * Reads the templated URI back off the tags the default convention just
-     * produced, rather than re-deriving it from the request. That keeps this
-     * convention in step with however Spring chose to template - or redact, for
-     * unmapped and redirected requests - the path.
-     */
-    private String uri(KeyValues keyValues) {
+    private static String valueOf(KeyValues keyValues, String key) {
         for (KeyValue keyValue : keyValues) {
-            if (URI_TAG.equals(keyValue.getKey())) {
+            if (key.equals(keyValue.getKey())) {
                 return keyValue.getValue();
             }
         }
