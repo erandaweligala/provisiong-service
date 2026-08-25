@@ -1,6 +1,8 @@
 package com.axonect.aee.template.baseapp.domain.exception;
 
 import com.axonect.aee.template.baseapp.application.constants.LoggingAdviceConstants;
+import com.axonect.aee.template.baseapp.application.monitoring.connectivity.ConnectivityMonitoringService;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -18,7 +20,19 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @RestControllerAdvice
+@RequiredArgsConstructor
 public class GlobalExceptionHandler {
+
+    /**
+     * Failures that reach the generic handler are offered to connectivity monitoring,
+     * which keeps the ones whose exception chain points at the database, Redis or
+     * Kafka and ignores everything else. This is the live-traffic half of connectivity
+     * detection - the probes in
+     * {@link ConnectivityMonitoringService#probeDependencies()} are the other half, and
+     * the only half for failures a service layer has already converted into an
+     * {@link AAAException} without keeping the cause.
+     */
+    private final ConnectivityMonitoringService connectivityMonitoringService;
 
     @ExceptionHandler(AAAException.class)
     public ResponseEntity<Map<String, Object>> handleAAAException(AAAException ex) {
@@ -64,6 +78,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGeneric(Exception ex) {
         log.error(LoggingAdviceConstants.EXCEPTION_STACK_TRACE, 0, ex.getMessage(), ex.getClass().getSimpleName());
+        connectivityMonitoringService.recordThrowable(ex);
         Map<String, Object> body = new HashMap<>();
         body.put("success", false);
         body.put("error_code", "AAA_500_INTERNAL_ERROR");

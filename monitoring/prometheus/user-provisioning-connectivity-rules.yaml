@@ -1,0 +1,148 @@
+# Prometheus / Thanos alerting rules for dependency connectivity of
+# airtel-aaa-user-provisioning-service - the Oracle database, Redis and Kafka.
+#
+# Apply as a PrometheusRule on OpenShift:
+#     oc -n airtel-aaa apply -f user-provisioning-connectivity-rules.yaml
+#
+# On a plain Prometheus, copy the `spec:` block into a rule_files entry instead.
+#
+# The metrics come from ConnectivityMonitoringService. Every AAA service exports the
+# same metric names, so every expression is scoped by the `service` label that
+# `connectivity.service-name` sets - these rules sit alongside the DB write service's
+# `AaaDbWrite*` rules without colliding.
+#
+# There are no recording rules here: unlike availability, nothing needs computing.
+# dependency_up is already the answer.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: airtel-aaa-user-provisioning-connectivity
+  namespace: airtel-aaa
+  labels:
+    app: airtel-aaa-user-provisioning-service
+    role: alert-rules
+spec:
+  groups:
+    - name: user-provisioning-dependency-connectivity
+      interval: 30s
+      rules:
+
+        # A dependency is only reported down after connectivity.failure-threshold
+        # consecutive failures, so `for: 1m` on top of that is deliberate belt and
+        # braces against a single bad probe round during a rolling restart.
+        - alert: UserProvisioningDependencyDown
+          expr: dependency_up{service="airtel-aaa-user-provisioning-service"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: "{{ $labels.dependency }} unreachable from user provisioning"
+            description: >-
+              {{ $labels.dependency }} has been down for over a minute on pod {{ $labels.pod }}.
+              The "AAA User Provisioning - Dependency Connectivity" dashboard has the failure
+              reason, or GET /monitoring/connectivity on the pod.
+
+        # Three separate outages at once is almost never three outages: it is the pod's
+        # own network or DNS. Worth its own alert because the fix is somewhere else.
+        - alert: UserProvisioningAllDependenciesDown
+          expr: count by (pod) (dependency_up{service="airtel-aaa-user-provisioning-service"} == 0) >= 3
+          for: 1m
+          labels:
+            severity: critical
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: "User provisioning pod {{ $labels.pod }} has lost every dependency"
+            description: >-
+              Oracle, Redis and Kafka are all unreachable from this pod - usually a pod-level
+              network or DNS fault rather than three separate outages.
+
+        # Failures that retries are still covering: nothing is down, but the path is
+        # degraded and the next blip will not be covered.
+        - alert: UserProvisioningDependencyConnectivityErrors
+          expr: >-
+            sum by (dependency, reason) (
+              rate(dependency_connectivity_failure_count_total{service="airtel-aaa-user-provisioning-service"}[5m])
+            ) > 0.2
+          for: 5m
+          labels:
+            severity: warning
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: "{{ $labels.dependency }} connectivity errors ({{ $labels.reason }})"
+            description: >-
+              Sustained {{ $labels.reason }} failures against {{ $labels.dependency }} without the
+              dependency being marked down - degraded connectivity, retries are still covering it.
+
+        - alert: UserProvisioningDependencyPoolExhausted
+          expr: >-
+            sum by (dependency) (
+              rate(dependency_connectivity_failure_count_total{service="airtel-aaa-user-provisioning-service",reason="pool_exhausted"}[5m])
+            ) > 0
+          for: 2m
+          labels:
+            severity: warning
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: "{{ $labels.dependency }} connection pool exhausted"
+            description: >-
+              Calls are failing to borrow a connection. Check spring.datasource.hikari.maximum-pool-size
+              (Oracle) or spring.data.redis.lettuce.pool.max-active (Redis) against current TPS -
+              the dependency itself may be perfectly healthy.
+
+        - alert: UserProvisioningDependencyAuthenticationFailing
+          expr: >-
+            sum by (dependency) (
+              increase(dependency_connectivity_failure_count_total{service="airtel-aaa-user-provisioning-service",reason="authentication_failed"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: critical
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: "{{ $labels.dependency }} rejecting user provisioning credentials"
+            description: >-
+              Credentials for {{ $labels.dependency }} are being rejected - a rotated secret or an
+              expired password. Retries will not fix this.
+
+        - alert: UserProvisioningDependencyFlapping
+          expr: increase(dependency_outage_count_total{service="airtel-aaa-user-provisioning-service"}[30m]) >= 3
+          for: 0m
+          labels:
+            severity: warning
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: "{{ $labels.dependency }} connectivity is flapping"
+            description: >-
+              {{ $labels.dependency }} went down and recovered at least 3 times in 30 minutes.
+              Investigate the network path, or raise connectivity.failure-threshold if the blips
+              are harmless.
+
+        # The earliest warning there is: the dependency still answers, but it is getting
+        # close to the 2s probe budget that would mark it down.
+        - alert: UserProvisioningDependencyProbeSlow
+          expr: >-
+            rate(dependency_probe_latency_seconds_sum{service="airtel-aaa-user-provisioning-service",outcome="success"}[5m])
+            / rate(dependency_probe_latency_seconds_count{service="airtel-aaa-user-provisioning-service",outcome="success"}[5m]) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: "{{ $labels.dependency }} health probe is slow"
+            description: >-
+              The connectivity probe against {{ $labels.dependency }} is averaging over 500ms.
+              The dependency is up but degraded; connectivity.probe-timeout-ms is 2s by default,
+              so an outage is close.
+
+        - alert: UserProvisioningNoConnectivityMetrics
+          expr: absent(dependency_up{service="airtel-aaa-user-provisioning-service"})
+          for: 10m
+          labels:
+            severity: warning
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: "No connectivity metrics from user provisioning"
+            description: >-
+              dependency_up is missing from the scrape. Either every pod is down, the scrape of
+              /actuator/prometheus is broken, or the connectivity beans failed to start.

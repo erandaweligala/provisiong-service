@@ -354,3 +354,22 @@ monitoring:
         method: GET
         uris:
           - /api/user/service-lines/status/{serviceLineNumber}
+
+# ---------------------------------------------------------------------------
+# Dependency connectivity monitoring (Oracle / Redis / Kafka)
+#
+# Publishes dependency_up and the dependency_* failure counters that the Grafana
+# dashboard in monitoring/grafana reads, and serves the same state as JSON on
+# GET /monitoring/connectivity. Same property names, same defaults and the same
+# metric names as the DB write service - `service-name` is what keeps the two
+# services' series apart in a shared Prometheus. See monitoring/CONNECTIVITY.md.
+# ---------------------------------------------------------------------------
+connectivity:
+  service-name: airtel-aaa-user-provisioning-service
+  enabled: true               # false stops the probes; live traffic failures still count
+  failure-threshold: 3        # consecutive connectivity failures before a dependency is marked DOWN
+  probe-interval-ms: 15000    # gap between probe rounds
+  probe-timeout-ms: 2000      # per-probe budget; a slower answer counts as a failure
+  probe-database: true        # SELECT 1 FROM DUAL through the Hikari pool
+  probe-redis: true           # PING
+  probe-kafka: true           # AdminClient describeCluster

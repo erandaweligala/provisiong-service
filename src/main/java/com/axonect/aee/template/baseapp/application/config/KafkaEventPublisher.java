@@ -1,6 +1,8 @@
 package com.axonect.aee.template.baseapp.application.config;
 
 import com.axonect.aee.template.baseapp.application.constants.LoggingAdviceConstants;
+import com.axonect.aee.template.baseapp.application.monitoring.connectivity.ConnectivityMonitoringService;
+import com.axonect.aee.template.baseapp.application.monitoring.connectivity.Dependency;
 import com.axonect.aee.template.baseapp.domain.events.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,6 +35,14 @@ public class KafkaEventPublisher {
     private final KafkaTemplate<String, Object> kafkaObjectTemplate;
 
     private final ReplyingKafkaTemplate<String, Object, String> replyingKafkaTemplate;
+
+    /**
+     * Publishing is the one place this service talks to Kafka on the request path, so
+     * the outcome of every publish is reported to connectivity monitoring: a completed
+     * round trip proves the cluster is reachable, and a failed one is classified and
+     * counted towards marking Kafka down.
+     */
+    private final ConnectivityMonitoringService connectivityMonitoringService;
 
     // ── Timeout / retry knobs ────────────────────────────────────────────────
     @Value("${app.kafka.publish.timeout-ms:2000}")
@@ -81,6 +91,9 @@ public class KafkaEventPublisher {
         logBrokerAck(future, eventType, key);
 
         ConsumerRecord<String, String> reply = future.get(publishTimeoutMs, TimeUnit.MILLISECONDS);
+        // The reply came back over Kafka, so the cluster is reachable - whatever the
+        // consumer thought of the payload.
+        connectivityMonitoringService.recordSuccess(Dependency.KAFKA);
         log.info(LoggingAdviceConstants.UP_KAFKA, System.currentTimeMillis() - kafkaStart, "PUBLISH_ACK", eventType + "|KEY:" + key);
         return evaluateConsumerReply(reply.value(), eventType, key);
     }
@@ -114,6 +127,7 @@ public class KafkaEventPublisher {
     }
 
     private void handleRetryOrThrow(Exception e, int attempt, String eventType, String key, long elapsedMs) {
+        connectivityMonitoringService.recordFailure(Dependency.KAFKA, e);
         log.error(LoggingAdviceConstants.UP_KAFKA, elapsedMs, "PUBLISH_FAIL_ATTEMPT_" + attempt, eventType + "|KEY:" + key + "|ERROR:" + e.getMessage());
 
         if (!retryEnabled || attempt >= maxRetryAttempts) {
