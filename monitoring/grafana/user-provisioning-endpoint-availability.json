@@ -12,7 +12,7 @@
   "graphTooltip": 1,
   "refresh": "30s",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "weekStart": "",
   "timezone": "",
   "time": {
@@ -385,6 +385,143 @@
       "panels": []
     },
     {
+      "id": 20,
+      "type": "table",
+      "title": "Endpoint status",
+      "description": "The short answer, one row per catalogued endpoint: green Yes at or above 99% availability, red No below it - the threshold UserProvisioningEndpointAvailabilityLow alerts on. The table beside it carries the percentage the answer is read from, and the request rate that says whether a Yes was earned or simply means nobody called.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 6,
+        "x": 0,
+        "y": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "A",
+          "expr": "(\n  (\n    100 * (\n      1 -\n      (sum by (api) (rate(http_server_requests_seconds_count{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\", status=~\"5..\"}[$__rate_interval])) or sum by (api) (rate(http_server_requests_seconds_count{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval])) * 0)\n      / sum by (api) (rate(http_server_requests_seconds_count{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval]))\n    )\n    or 100 * max by (api) (api_endpoint_info{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"})\n  ) >= bool 99\n)\n* on (api) group_left(title) max by (api, title) (api_endpoint_info{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"})",
+          "editorMode": "code",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "api": true
+            },
+            "indexByName": {
+              "title": 0,
+              "Value": 1
+            },
+            "renameByName": {
+              "title": "Endpoint",
+              "Value": "Available"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Available",
+                "desc": false
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Available"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "text": "Yes",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "0": {
+                        "text": "No",
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      }
+    },
+    {
       "id": 7,
       "type": "table",
       "title": "Endpoint availability and response time",
@@ -395,8 +532,8 @@
       },
       "gridPos": {
         "h": 11,
-        "w": 24,
-        "x": 0,
+        "w": 18,
+        "x": 6,
         "y": 7
       },
       "targets": [

@@ -104,10 +104,11 @@ Two things follow from this and are worth being explicit about:
 
 ### The same answer as Yes or No
 
-The dashboard table leads with an *Available* column that answers the question
-without a number. It is the expression above compared against the alerting
-threshold, which makes it 1 or 0 instead of a percentage, and the panel maps
-those two values to Yes and No:
+Two panels answer the question without a number: the *Endpoint status* table,
+which is only the endpoint and a green Yes or red No, and the *Available*
+column the wider table beside it leads with. Both are the expression above
+compared against the alerting threshold, which makes it 1 or 0 instead of a
+percentage, mapped in the panel to Yes and No:
 
 ```promql
 ( <the availability expression above> ) >= bool 0.99
@@ -126,8 +127,22 @@ The *Availability* column beside it still carries the percentage, which is
 where you see how far past the line an endpoint is; No at 98.9% and No at 0%
 are not the same morning.
 
+*Endpoint status* has one more piece to it, because the request counters carry
+no readable endpoint name - only the `api` tag. The readable one lives on
+`api_endpoint_info`, so the panel multiplies the 1-or-0 by that gauge to carry
+its `title` across:
+
+```promql
+( <the yes/no expression> )
+* on (api) group_left(title) max by (api, title) (api_endpoint_info{...})
+```
+
+The gauge is a constant 1, so the multiplication changes no value - it only
+borrows the label, which the panel then renames to *Endpoint* and shows beside
+the status. Nothing else from the query is displayed.
+
 Yes for an idle endpoint means what 100% means for one: nothing was called, so
-nothing failed. Read it with *Requests/s*, as above.
+nothing failed. Read it with *Requests/s* on the table beside it, as above.
 
 ## How response time is measured
 
