@@ -15,6 +15,12 @@ There is nothing to tune: no per-endpoint budgets, no alert thresholds on
 latency, no synthetic probe. Both figures are read straight off the one request
 timer Spring Boot already publishes.
 
+This file covers the REST endpoints. Whether the service can reach the Oracle
+database, Redis and Kafka is monitored separately - see
+[CONNECTIVITY.md](CONNECTIVITY.md). The two answer different questions: this one
+says whether requests are being served, that one says whether the infrastructure
+behind them is reachable, and a dependency outage usually shows up there first.
+
 ## What is in here
 
 | File | Purpose |
@@ -23,6 +29,9 @@ timer Spring Boot already publishes.
 | `prometheus/servicemonitor.yaml` | Makes the Prometheus Operator scrape the pods. |
 | `prometheus/user-provisioning-endpoint-rules.yaml` | Recording rules for availability and response time, plus the availability alerts. |
 | `prometheus/user-provisioning-endpoint-rules_test.yaml` | `promtool` unit test pinning down what those rules return in each case. |
+| `CONNECTIVITY.md` | Dependency connectivity monitoring (Oracle / Redis / Kafka) - the doc for the two files below. |
+| `grafana/user-provisioning-dependency-connectivity.json` | The connectivity dashboard. Import into Grafana. |
+| `prometheus/user-provisioning-connectivity-rules.yaml` | Connectivity alerts (dependency down, pool exhausted, flapping, slow probes). |
 
 ## Metrics published
 
