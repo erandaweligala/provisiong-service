@@ -102,6 +102,33 @@ Two things follow from this and are worth being explicit about:
   ingress) can appear here either; `UserProvisioningNoMetrics` covers the case
   where no pod is reporting at all.
 
+### The same answer as Yes or No
+
+The dashboard table leads with an *Available* column that answers the question
+without a number. It is the expression above compared against the alerting
+threshold, which makes it 1 or 0 instead of a percentage, and the panel maps
+those two values to Yes and No:
+
+```promql
+( <the availability expression above> ) >= bool 0.99
+```
+
+`bool` is the part that matters. A bare `>= 0.99` in Prometheus is a filter: it
+keeps the endpoints that pass and drops the rest, so the table would silently
+list only the healthy ones - exactly the endpoints you are not looking for.
+`>= bool 0.99` keeps every endpoint and replaces its value with 1 or 0.
+
+The cut is 99%, the same line `UserProvisioningEndpointAvailabilityLow` alerts
+on, so an endpoint reading No is one that pages if it stays there for five
+minutes. Move it by changing the number in the panel query - the query is
+written in percent, so the dashboard compares against `99` rather than `0.99`.
+The *Availability* column beside it still carries the percentage, which is
+where you see how far past the line an endpoint is; No at 98.9% and No at 0%
+are not the same morning.
+
+Yes for an idle endpoint means what 100% means for one: nothing was called, so
+nothing failed. Read it with *Requests/s*, as above.
+
 ## How response time is measured
 
 Three views of the same timer, all per endpoint:

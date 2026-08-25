@@ -12,7 +12,7 @@
   "graphTooltip": 1,
   "refresh": "30s",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "weekStart": "",
   "timezone": "",
   "time": {
@@ -388,7 +388,7 @@
       "id": 7,
       "type": "table",
       "title": "Endpoint availability and response time",
-      "description": "One row per entry in monitoring.api.endpoints. Every endpoint is listed whether or not it took traffic: a row with 0 requests/s and 100% availability means nobody called it, which is not the same as proven healthy - and its response time columns are blank, because an endpoint nobody called has no response time.",
+      "description": "One row per entry in monitoring.api.endpoints. Available is Yes while the endpoint is at or above 99% availability - the same threshold as the UserProvisioningEndpointAvailabilityLow alert - and No below it; the Availability column next to it is the figure that answer is read from. Every endpoint is listed whether or not it took traffic: a row with 0 requests/s and 100% availability means nobody called it, which is not the same as proven healthy - and its response time columns are blank, because an endpoint nobody called has no response time.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -495,6 +495,18 @@
           "range": false,
           "instant": true,
           "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "refId": "I",
+          "expr": "(\n  100 * (\n    1 -\n    (sum by (api) (rate(http_server_requests_seconds_count{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\", status=~\"5..\"}[$__rate_interval])) or sum by (api) (rate(http_server_requests_seconds_count{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval])) * 0)\n    / sum by (api) (rate(http_server_requests_seconds_count{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval]))\n  )\n  or 100 * max by (api) (api_endpoint_info{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"})\n) >= bool 99",
+          "editorMode": "code",
+          "range": false,
+          "instant": true,
+          "format": "table"
         }
       ],
       "transformations": [
@@ -522,18 +534,20 @@
             "indexByName": {
               "title": 0,
               "api": 1,
-              "Value #B": 2,
-              "Value #C": 3,
-              "Value #D": 4,
-              "Value #E": 5,
-              "Value #F": 6,
-              "Value #G": 7,
-              "Value #H": 8,
-              "Value #A": 9
+              "Value #I": 2,
+              "Value #B": 3,
+              "Value #C": 4,
+              "Value #D": 5,
+              "Value #E": 6,
+              "Value #F": 7,
+              "Value #G": 8,
+              "Value #H": 9,
+              "Value #A": 10
             },
             "renameByName": {
               "title": "Endpoint",
               "api": "Metric tag",
+              "Value #I": "Available",
               "Value #B": "Requests/s",
               "Value #C": "Availability",
               "Value #D": "5xx/s",
@@ -578,6 +592,49 @@
           }
         },
         "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Available"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "text": "Yes",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "0": {
+                        "text": "No",
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
           {
             "matcher": {
               "id": "byName",

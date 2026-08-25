@@ -148,6 +148,28 @@ tests:
           - labels: '{__name__="api:availability_ratio:rate5m", microservice="airtel-aaa-user-provisioning-service", api="slow_endpoint"}'
             value: 1
 
+      # The same figure as a plain yes/no, which is what the Available column of
+      # the dashboard table shows: 1 (Yes) at or above 99%, 0 (No) below it -
+      # the threshold UserProvisioningEndpointAvailabilityLow alerts on. get_user
+      # at 90% is the case that separates the two, and an idle endpoint answers
+      # Yes for the same reason it reads 100%: nothing was called, so nothing
+      # failed.
+      - expr: api:availability_ratio:rate5m >= bool 0.99
+        eval_time: 10m
+        exp_samples:
+          - labels: '{microservice="airtel-aaa-user-provisioning-service", api="create_user"}'
+            value: 1
+          - labels: '{microservice="airtel-aaa-user-provisioning-service", api="get_user"}'
+            value: 0
+          - labels: '{microservice="airtel-aaa-user-provisioning-service", api="delete_user"}'
+            value: 0
+          - labels: '{microservice="airtel-aaa-user-provisioning-service", api="idle_endpoint"}'
+            value: 1
+          - labels: '{microservice="airtel-aaa-user-provisioning-service", api="fast_endpoint"}'
+            value: 1
+          - labels: '{microservice="airtel-aaa-user-provisioning-service", api="slow_endpoint"}'
+            value: 1
+
       # Exact: the timer's own total time over its own request count.
       - expr: round(api:latency_seconds:avg_rate5m * 1000)
         eval_time: 10m
