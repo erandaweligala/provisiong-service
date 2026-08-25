@@ -63,6 +63,42 @@ spec:
               api_endpoint_info{microservice="airtel-aaa-user-provisioning-service"}
             )
 
+        # Response time per endpoint. Unlike availability these have no idle
+        # fallback on purpose: an endpoint nobody called has no response time,
+        # and the honest answer is no data rather than a made up zero.
+        #
+        # The average is exact - it is the timer's own total time over its own
+        # request count. The percentiles are estimates read off the histogram
+        # buckets configured by management.metrics.distribution.slo in
+        # application.yml, so they are only as precise as those bucket edges.
+        - record: api:latency_seconds:avg_rate5m
+          expr: |
+            sum by (microservice, api) (
+              rate(http_server_requests_seconds_sum{microservice="airtel-aaa-user-provisioning-service", api!="other"}[5m])
+            )
+            /
+            sum by (microservice, api) (
+              rate(http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api!="other"}[5m])
+            )
+
+        - record: api:latency_seconds:p95_rate5m
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (microservice, api, le) (
+                rate(http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api!="other"}[5m])
+              )
+            )
+
+        - record: api:latency_seconds:p99_rate5m
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (microservice, api, le) (
+                rate(http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api!="other"}[5m])
+              )
+            )
+
     - name: user-provisioning-endpoint-alerts
       rules:
         # api_endpoint_info exists for every catalogued endpoint from startup, so

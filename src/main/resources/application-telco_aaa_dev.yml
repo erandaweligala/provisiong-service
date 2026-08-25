@@ -251,6 +251,15 @@ management:
     metrics:
       export:
         enabled: true
+  metrics:
+    distribution:
+      # Publishes http_server_requests_seconds_bucket, which is what lets Grafana
+      # work out a response time percentile per endpoint. These are plain
+      # histogram buckets, not per-endpoint budgets: nothing alerts on them and no
+      # endpoint has a target of its own. Keep the list short - every bucket is
+      # another time series per endpoint. See monitoring/README.md.
+      slo:
+        "[http.server.requests]": 25ms,50ms,100ms,200ms,300ms,500ms,750ms,1s,2s,3s,5s,10s
 
 action-log:
   opco: aws-env
