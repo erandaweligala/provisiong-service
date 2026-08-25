@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "Availability of the REST endpoints published by airtel-aaa-user-provisioning-service, grouped by the api tag from monitoring.api.endpoints. Availability is the share of responses that were not 5xx.",
+  "description": "Availability, error rate and response time of the REST endpoints published by airtel-aaa-user-provisioning-service, grouped by the api tag from monitoring.api.endpoints.",
   "editable": true,
   "graphTooltip": 1,
   "links": [],
@@ -44,7 +44,7 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 6,
+        "w": 4,
         "x": 0,
         "y": 1
       },
@@ -92,7 +92,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "count(count by (instance) (api_endpoint_info{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}))",
+          "expr": "count(count by (instance) (api_endpoint_threshold_milliseconds{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}))",
           "refId": "A",
           "range": true,
           "legendFormat": ""
@@ -110,8 +110,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 6,
-        "x": 6,
+        "w": 5,
+        "x": 4,
         "y": 1
       },
       "fieldConfig": {
@@ -185,8 +185,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 6,
-        "x": 12,
+        "w": 5,
+        "x": 9,
         "y": 1
       },
       "fieldConfig": {
@@ -248,8 +248,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 6,
-        "x": 18,
+        "w": 5,
+        "x": 14,
         "y": 1
       },
       "fieldConfig": {
@@ -309,6 +309,76 @@
       ]
     },
     {
+      "id": 6,
+      "type": "stat",
+      "title": "Endpoints over threshold",
+      "description": "How many catalogued endpoints served at least one response slower than their own response time threshold in the selected window.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 19,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "count(100 * (1 - ((sum by (api) (rate(api_requests_over_threshold_total{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval])) or sum by (api) (rate(http_server_requests_seconds_count{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval])) * 0) / sum by (api) (rate(http_server_requests_seconds_count{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval])))) < 100) or vector(0)",
+          "refId": "A",
+          "range": true,
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
       "id": 7,
       "type": "row",
       "title": "Per endpoint",
@@ -343,7 +413,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "max by (api, title) (api_endpoint_info{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"})",
+          "expr": "max by (api, title) (api_endpoint_threshold_milliseconds{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"})",
           "refId": "A",
           "range": false,
           "format": "table",
@@ -384,6 +454,42 @@
           "range": false,
           "format": "table",
           "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (api, le) (rate(http_server_requests_seconds_bucket{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval])))",
+          "refId": "E",
+          "range": false,
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (api, le) (rate(http_server_requests_seconds_bucket{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval])))",
+          "refId": "F",
+          "range": false,
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "100 * (1 - ((sum by (api) (rate(api_requests_over_threshold_total{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval])) or sum by (api) (rate(http_server_requests_seconds_count{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval])) * 0) / sum by (api) (rate(http_server_requests_seconds_count{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval]))))",
+          "refId": "G",
+          "range": false,
+          "format": "table",
+          "instant": true
         }
       ],
       "transformations": [
@@ -405,22 +511,28 @@
         {
           "id": "organize",
           "options": {
-            "excludeByName": {
-              "Value #A": true
-            },
+            "excludeByName": {},
             "indexByName": {
               "title": 0,
               "api": 1,
               "Value #B": 2,
               "Value #C": 3,
-              "Value #D": 4
+              "Value #D": 4,
+              "Value #E": 5,
+              "Value #F": 6,
+              "Value #A": 7,
+              "Value #G": 8
             },
             "renameByName": {
               "title": "Endpoint",
               "api": "Metric tag",
+              "Value #A": "Threshold",
               "Value #B": "Requests/s",
               "Value #C": "Availability",
-              "Value #D": "5xx/s"
+              "Value #D": "5xx/s",
+              "Value #E": "p95",
+              "Value #F": "p99",
+              "Value #G": "Within threshold"
             }
           }
         }
@@ -496,6 +608,53 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "Within threshold"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 95
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 99
+                    },
+                    {
+                      "color": "green",
+                      "value": 99.9
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "Requests/s"
             },
             "properties": [
@@ -522,6 +681,54 @@
               {
                 "id": "decimals",
                 "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p99"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Threshold"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "decimals",
+                "value": 0
               }
             ]
           }
@@ -722,6 +929,237 @@
       ]
     },
     {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Latency vs response time threshold",
+      "description": "Dashed red lines are each endpoint's configured threshold, published as api_endpoint_threshold_milliseconds - change it in application.yml, not here.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "unit": "s",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "threshold .*"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    10,
+                    10
+                  ],
+                  "fill": "dash"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "max",
+            "mean",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (api, le) (rate(http_server_requests_seconds_bucket{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval])))",
+          "refId": "A",
+          "range": true,
+          "legendFormat": "p95 {{api}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (api, le) (rate(http_server_requests_seconds_bucket{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval])))",
+          "refId": "B",
+          "range": true,
+          "legendFormat": "p99 {{api}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "max by (api) (api_endpoint_threshold_milliseconds{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}) / 1000",
+          "refId": "C",
+          "range": true,
+          "legendFormat": "threshold {{api}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Responses within threshold",
+      "description": "Share of requests that answered inside the endpoint's own response time budget, from api_requests_over_threshold_total.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "unit": "percent",
+          "decimals": 2,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "min",
+            "mean",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "100 * (1 - ((sum by (api) (rate(api_requests_over_threshold_total{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval])) or sum by (api) (rate(http_server_requests_seconds_count{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval])) * 0) / sum by (api) (rate(http_server_requests_seconds_count{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval]))))",
+          "refId": "A",
+          "range": true,
+          "legendFormat": "{{api}}"
+        }
+      ]
+    },
+    {
       "id": 13,
       "type": "timeseries",
       "title": "Request rate by endpoint",
@@ -734,7 +1172,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 27
+        "y": 36
       },
       "fieldConfig": {
         "defaults": {
@@ -821,7 +1259,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 27
+        "y": 36
       },
       "fieldConfig": {
         "defaults": {
@@ -893,6 +1331,193 @@
           "legendFormat": "{{status}}"
         }
       ]
+    },
+    {
+      "id": 17,
+      "type": "row",
+      "title": "Synthetic availability probe (optional)",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "panels": [
+        {
+          "id": 15,
+          "type": "timeseries",
+          "title": "Synthetic probe result",
+          "description": "1 = the last scheduled probe of this endpoint got its expected status, 0 = it did not. Empty unless monitoring.api.probe.enabled is true.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "mappings": [],
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "fillOpacity": 8,
+                "pointSize": 5,
+                "showPoints": "never",
+                "spanNulls": false,
+                "axisSoftMin": 0,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                }
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "showLegend": true,
+              "calcs": [
+                "min",
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "editorMode": "code",
+              "expr": "min by (api) (api_endpoint_up{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"})",
+              "refId": "A",
+              "range": true,
+              "legendFormat": "{{api}}"
+            }
+          ]
+        },
+        {
+          "id": 16,
+          "type": "timeseries",
+          "title": "Probe failures by reason",
+          "description": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "mappings": [],
+              "unit": "reqps",
+              "decimals": 3,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "fillOpacity": 8,
+                "pointSize": 5,
+                "showPoints": "never",
+                "spanNulls": false,
+                "axisSoftMin": 0,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                }
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "showLegend": true,
+              "calcs": [
+                "max",
+                "lastNotNull"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "editorMode": "code",
+              "expr": "sum by (api, reason) (rate(api_endpoint_probe_failures_total{microservice=~\"$microservice\", api=~\"$api\", api!=\"other\"}[$__rate_interval]))",
+              "refId": "A",
+              "range": true,
+              "legendFormat": "{{api}} / {{reason}}"
+            }
+          ]
+        }
+      ]
     }
   ],
   "refresh": "30s",
@@ -924,7 +1549,7 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "definition": "label_values(api_endpoint_info, microservice)",
+        "definition": "label_values(api_endpoint_threshold_milliseconds, microservice)",
         "hide": 0,
         "includeAll": false,
         "label": "Microservice",
@@ -932,7 +1557,7 @@
         "name": "microservice",
         "options": [],
         "query": {
-          "query": "label_values(api_endpoint_info, microservice)",
+          "query": "label_values(api_endpoint_threshold_milliseconds, microservice)",
           "refId": "microservice"
         },
         "refresh": 1,
@@ -956,7 +1581,7 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "definition": "label_values(api_endpoint_info{microservice=~\"$microservice\"}, api)",
+        "definition": "label_values(api_endpoint_threshold_milliseconds{microservice=~\"$microservice\"}, api)",
         "hide": 0,
         "includeAll": true,
         "label": "Endpoint",
@@ -964,7 +1589,7 @@
         "name": "api",
         "options": [],
         "query": {
-          "query": "label_values(api_endpoint_info{microservice=~\"$microservice\"}, api)",
+          "query": "label_values(api_endpoint_threshold_milliseconds{microservice=~\"$microservice\"}, api)",
           "refId": "api"
         },
         "refresh": 1,

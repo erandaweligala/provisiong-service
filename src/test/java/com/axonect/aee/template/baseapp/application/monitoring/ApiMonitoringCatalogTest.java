@@ -23,6 +23,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -161,11 +162,41 @@ class ApiMonitoringCatalogTest {
     }
 
     @Test
+    void noStateChangingEndpointIsProbed() {
+        List<String> unsafe = properties.getEndpoints().stream()
+                .filter(endpoint -> endpoint.getProbePath() != null && !endpoint.getProbePath().isBlank())
+                .filter(endpoint -> !"GET".equalsIgnoreCase(endpoint.getMethod()))
+                .map(MonitoredEndpoint::getName)
+                .toList();
+
+        assertTrue(unsafe.isEmpty(), "synthetic probes must never call state changing endpoints: " + unsafe);
+    }
+
+    @Test
+    void thresholdsMatchTheApiSheet() {
+        assertEquals(2000L, properties.getDefaultThresholdMs());
+
+        ApiEndpointRegistry registry =
+                new ApiEndpointRegistry(properties.getEndpoints(), properties.getDefaultThresholdMs());
+        Set<Long> thresholds = properties.getEndpoints().stream()
+                .map(registry::thresholdMsFor)
+                .collect(Collectors.toSet());
+
+        assertEquals(Set.of(2000L), thresholds);
+    }
+
+    @Test
     void deploymentProfileCarriesTheSameCatalog() throws IOException {
         ApiMonitoringProperties deployed = bindFrom("application-telco_aaa_dev.yml");
 
         assertEquals(properties.getEndpoints().stream().map(MonitoredEndpoint::getName).toList(),
                 deployed.getEndpoints().stream().map(MonitoredEndpoint::getName).toList());
         assertEquals(properties.getMicroservice(), deployed.getMicroservice());
+    }
+
+    @Test
+    void probeIsOffByDefault() {
+        assertFalse(properties.getProbe().isEnabled(),
+                "the synthetic probe issues real HTTP calls and must not ship enabled");
     }
 }
