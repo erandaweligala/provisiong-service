@@ -37,15 +37,13 @@ public class ApiEndpointRegistry {
     /** Matches a single Spring path variable, e.g. {@code {user_name}} or {@code {id:\\d+}}. */
     private static final Pattern PATH_VARIABLE = Pattern.compile("\\{[^/]*}");
 
+    /** The {@code api} tag given to traffic that is not in the catalog. */
     private static final String UNMATCHED = "other";
 
     private final Map<String, MonitoredEndpoint> byMethodAndUri;
     private final Map<String, MonitoredEndpoint> byName;
-    private final long defaultThresholdMs;
 
-    public ApiEndpointRegistry(List<MonitoredEndpoint> endpoints, long defaultThresholdMs) {
-        this.defaultThresholdMs = defaultThresholdMs;
-
+    public ApiEndpointRegistry(List<MonitoredEndpoint> endpoints) {
         Map<String, MonitoredEndpoint> uriIndex = new HashMap<>();
         Map<String, MonitoredEndpoint> nameIndex = new LinkedHashMap<>();
 
@@ -78,40 +76,18 @@ public class ApiEndpointRegistry {
     }
 
     /**
-     * @return the catalog entry serving the given request, or empty when the
-     * request is not on the availability dashboard.
-     */
-    public Optional<MonitoredEndpoint> find(String method, String templatedUri) {
-        if (method == null || templatedUri == null) {
-            return Optional.empty();
-        }
-        return Optional.ofNullable(byMethodAndUri.get(key(method, templatedUri)));
-    }
-
-    /**
      * @return the value of the {@code api} metric tag for the given request:
      * the catalog slug, or {@value #UNMATCHED} for traffic that is not tracked.
      * Returning a constant instead of the raw URI keeps the tag's cardinality
      * bounded by the size of the catalog.
      */
     public String tagFor(String method, String templatedUri) {
-        return find(method, templatedUri).map(MonitoredEndpoint::getName).orElse(UNMATCHED);
-    }
-
-    /**
-     * @return the response time budget of the endpoint, falling back to the
-     * catalog-wide default.
-     */
-    public long thresholdMsFor(MonitoredEndpoint endpoint) {
-        Long threshold = endpoint.getThresholdMs();
-        return threshold == null ? defaultThresholdMs : threshold;
-    }
-
-    /**
-     * @return the catalog entry published under the given {@code api} metric tag.
-     */
-    public Optional<MonitoredEndpoint> findByName(String name) {
-        return name == null ? Optional.empty() : Optional.ofNullable(byName.get(name));
+        if (method == null || templatedUri == null) {
+            return UNMATCHED;
+        }
+        return Optional.ofNullable(byMethodAndUri.get(key(method, templatedUri)))
+                .map(MonitoredEndpoint::getName)
+                .orElse(UNMATCHED);
     }
 
     /**
