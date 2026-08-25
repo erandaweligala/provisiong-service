@@ -15,11 +15,24 @@ There is nothing to tune: no per-endpoint budgets, no alert thresholds on
 latency, no synthetic probe. Both figures are read straight off the one request
 timer Spring Boot already publishes.
 
-This file covers the REST endpoints. Whether the service can reach the Oracle
-database, Redis and Kafka is monitored separately - see
-[CONNECTIVITY.md](CONNECTIVITY.md). The two answer different questions: this one
-says whether requests are being served, that one says whether the infrastructure
-behind them is reachable, and a dependency outage usually shows up there first.
+This file covers what the REST endpoints' traffic looks like. Two related
+questions are monitored separately:
+
+| Document | Question it answers |
+| --- | --- |
+| **README.md** (this file) | What share of requests to each endpoint failed, and how long they took. |
+| [HEALTH.md](HEALTH.md) | Whether each endpoint is fit to serve - including the ones nobody called. |
+| [CONNECTIVITY.md](CONNECTIVITY.md) | Whether Oracle, Redis and Kafka are reachable at all. |
+
+The distinction between the first two is the important one, and it is the reason
+[HEALTH.md](HEALTH.md) exists. Availability is a ratio of requests, so it is
+exactly as informative as the traffic behind it: an endpoint nobody called reads
+100%, an endpoint whose handler was renamed out of the build reads 100% while
+answering 404 to every caller, and neither says anything about the database. Per
+endpoint health checks the handler and the dependencies directly, every 15
+seconds, so those cases get a real answer. Read the two together - this file
+says what happened to the requests, that one says whether the endpoint is fit to
+take the next one.
 
 ## What is in here
 
@@ -29,6 +42,10 @@ behind them is reachable, and a dependency outage usually shows up there first.
 | `prometheus/servicemonitor.yaml` | Makes the Prometheus Operator scrape the pods. |
 | `prometheus/user-provisioning-endpoint-rules.yaml` | Recording rules for availability and response time, plus the availability alerts. |
 | `prometheus/user-provisioning-endpoint-rules_test.yaml` | `promtool` unit test pinning down what those rules return in each case. |
+| `HEALTH.md` | Per-endpoint health monitoring - the doc for the three files below. |
+| `grafana/user-provisioning-endpoint-health.json` | The health dashboard. Import into Grafana. |
+| `prometheus/user-provisioning-endpoint-health-rules.yaml` | Health alerts (unhealthy, degraded, not mapped, flapping). |
+| `prometheus/user-provisioning-endpoint-health-rules_test.yaml` | `promtool` unit test for those rules. |
 | `CONNECTIVITY.md` | Dependency connectivity monitoring (Oracle / Redis / Kafka) - the doc for the two files below. |
 | `grafana/user-provisioning-dependency-connectivity.json` | The connectivity dashboard. Import into Grafana. |
 | `prometheus/user-provisioning-connectivity-rules.yaml` | Connectivity alerts (dependency down, pool exhausted, flapping, slow probes). |
@@ -42,6 +59,9 @@ behind them is reachable, and a dependency outage usually shows up there first.
 | `http_server_requests_seconds_bucket` | histogram | same, plus `le` | How many requests finished within each bucket. This is what percentiles are read from. |
 | `http_server_requests_seconds_max` | gauge | same | The slowest single request in a short rolling window. |
 | `api_endpoint_info` | gauge | `api`, `method`, `title`, `microservice` | Constant 1, one per catalogued endpoint. This is the catalog itself: it exists from startup, before any traffic. |
+
+Per-endpoint health publishes a further ten `api_endpoint_*` series from the same
+catalog - see [HEALTH.md](HEALTH.md#metrics-published).
 
 All four request series come from one Micrometer timer, so response time costs
 no extra instrumentation - only the buckets, which are configured in
@@ -100,7 +120,8 @@ Two things follow from this and are worth being explicit about:
   for exactly this reason - 100% over 0 req/s says very little. Nothing that
   never reaches the application (a pod that is down, a request rejected by the
   ingress) can appear here either; `UserProvisioningNoMetrics` covers the case
-  where no pod is reporting at all.
+  where no pod is reporting at all. For a real answer on a quiet endpoint, read
+  `api_endpoint_health` next to it - see [HEALTH.md](HEALTH.md).
 
 ## How response time is measured
 
@@ -207,6 +228,10 @@ Endpoints are configured, not hard coded. To add one, add an entry under
           - /api/bng/{bng_id}    # the Spring URI template, path variable names ignored
 ```
 
+A `dependencies` list goes on each entry as well; it is what per-endpoint health
+checks, and [HEALTH.md](HEALTH.md#dependencies-are-declared-per-endpoint) covers
+how to choose it.
+
 `uris` must match the controller's request mapping structure exactly - path
 variable *names* are ignored, but the path shape is not. A handler mapped to
 several paths lists all of them, and they all report as one endpoint.
@@ -220,7 +245,9 @@ endpoint variable is populated from `api_endpoint_info`.
 ## Turning it off
 
 `monitoring.api.enabled: false` drops the `api` tag, the `microservice` common
-tag and `api_endpoint_info`. `http_server_requests` keeps working with its stock
+tag and `api_endpoint_info` - and takes per-endpoint health with it, since health
+reads the same catalog. To turn off health alone, use
+`monitoring.api.health.enabled: false`. `http_server_requests` keeps working with its stock
 Spring Boot tags; the dashboard, which groups by `api`, will go empty.
 
 Removing `management.metrics.distribution.slo` turns off the histogram buckets

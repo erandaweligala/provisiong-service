@@ -56,4 +56,20 @@ public class MonitoredEndpoint {
      * as the same template.</p>
      */
     private List<String> uris = new ArrayList<>();
+
+    /**
+     * The dependencies this endpoint cannot serve correctly without, by the label
+     * dependency connectivity monitoring uses: {@code database}, {@code redis},
+     * {@code kafka}.
+     *
+     * <p>This is what lets an endpoint that has taken no traffic still be given a
+     * verdict - if the database it reads from is unreachable, the endpoint is not
+     * healthy however quiet it has been. List only what a failure of would make the
+     * endpoint answer 5xx; a dependency it degrades gracefully without belongs
+     * nowhere near this list, because everything here can mark the endpoint
+     * UNHEALTHY on its own.</p>
+     *
+     * <p>Empty means health is judged from traffic alone.</p>
+     */
+    private List<String> dependencies = new ArrayList<>();
 }
