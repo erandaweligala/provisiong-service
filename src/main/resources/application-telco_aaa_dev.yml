@@ -253,12 +253,18 @@ management:
         enabled: true
   metrics:
     distribution:
-      # Publishes http_server_requests_seconds_bucket, so a response time
-      # percentile per endpoint can be read off the histogram. These are plain
-      # histogram buckets, not per-endpoint budgets: nothing alerts on them and no
-      # endpoint has a target of its own. No dashboard or rule in monitoring/
-      # reads them today - they are here for ad hoc queries in Prometheus. Keep
-      # the list short: every bucket is another time series per endpoint.
+      # Publishes http_server_requests_seconds_bucket, which everything about
+      # response time is built on: the percentiles, the heatmap, and the
+      # exemplars that name individual requests - an exemplar is carried by a
+      # bucket, so an endpoint with no buckets has nowhere to put one. Despite
+      # the property name these are plain histogram buckets, not per-endpoint
+      # budgets: no endpoint has a target of its own.
+      #
+      # The list is a trade. Every bucket is another time series per endpoint,
+      # and also another individual request each scrape can name; the buckets
+      # are also the resolution of every percentile, so a p99 reported as 750ms
+      # means "between 500ms and 750ms". Read by the API response time dashboard
+      # and by user-provisioning-response-time-rules.yaml.
       slo:
         "[http.server.requests]": 25ms,50ms,100ms,200ms,300ms,500ms,750ms,1s,2s,3s,5s,10s
 
@@ -390,6 +396,22 @@ monitoring:
       minimum-requests: 20            # below this, a failure reads DEGRADED rather than a ratio
       use-dependency-state: true      # a required dependency being DOWN marks the endpoint UNHEALTHY
       verify-mappings: true           # check at startup that every catalogued endpoint has a handler
+
+    # -----------------------------------------------------------------------
+    # Per-request response time. The histogram above already gives percentiles;
+    # what it cannot give is the duration of one particular request, because a
+    # bucket is a counter and the durations are gone once counted. Exemplars are
+    # the exception - a single observed value carried alongside a bucket - and
+    # this is what labels them with the request that produced them, so a slow
+    # point in Grafana names a request id you can follow into the logs and into
+    # ACTION_LOG. See monitoring/RESPONSE-TIME.md, which also covers what has to
+    # be true of Prometheus for the exemplars to arrive at all.
+    # -----------------------------------------------------------------------
+    response-time:
+      enabled: true
+      min-retention-ms: 0             # 0 = every request replaces its bucket's exemplar
+      log-slow-requests: true         # a WARN line naming any request over the threshold
+      slow-request-threshold-ms: 1000 # the fallback for a slow request no exemplar carried
 
 # ---------------------------------------------------------------------------
 # Dependency connectivity monitoring (Oracle / Redis / Kafka)

@@ -3,19 +3,24 @@
 Monitoring for `airtel-aaa-user-provisioning-service`, from the service's own
 Micrometer metrics through Prometheus into Grafana.
 
-Two questions are monitored, each with its own document, dashboard and alerts:
+Three questions are monitored, each with its own document, dashboard and alerts:
 
 | Document | Question it answers |
 | --- | --- |
 | [HEALTH.md](HEALTH.md) | Whether each REST endpoint is fit to serve - including the ones nobody called. |
+| [RESPONSE-TIME.md](RESPONSE-TIME.md) | How long each individual request actually took. |
 | [CONNECTIVITY.md](CONNECTIVITY.md) | Whether Oracle, Redis and Kafka are reachable at all. |
 
-Read them together: health says whether an endpoint can take the next request,
-connectivity says whether the infrastructure underneath it is up. When an
-endpoint reports `dependency_down`, the second document is where the cause is.
+Read them together. Health says whether an endpoint can take the next request,
+response time says what the last one cost the caller, and connectivity says
+whether the infrastructure underneath both is up. They are separate because a
+slow endpoint is not an unhealthy one - it is still serving - and because an
+endpoint that is both is a different problem from an endpoint that is only slow.
+When an endpoint reports `dependency_down`, or when every endpoint goes slow at
+once, connectivity is where the cause is.
 
-This file covers what the two have in common - the endpoint catalog that health
-is driven by, and the scrape that carries both.
+This file covers what the three have in common - the endpoint catalog they group
+by, and the scrape that carries all of them.
 
 ## What is in here
 
@@ -26,6 +31,10 @@ is driven by, and the scrape that carries both.
 | `grafana/user-provisioning-endpoint-health.json` | The health dashboard. Import into Grafana. |
 | `prometheus/user-provisioning-endpoint-health-rules.yaml` | Health alerts (unhealthy, degraded, not mapped, flapping). |
 | `prometheus/user-provisioning-endpoint-health-rules_test.yaml` | `promtool` unit test for those rules. |
+| `RESPONSE-TIME.md` | Per-request response time - the doc for the three files below. |
+| `grafana/user-provisioning-response-time.json` | The response time dashboard. Import into Grafana. |
+| `prometheus/user-provisioning-response-time-rules.yaml` | Response time alerts (slow, very slow, one extreme request, histogram missing). |
+| `prometheus/user-provisioning-response-time-rules_test.yaml` | `promtool` unit test for those rules. |
 | `CONNECTIVITY.md` | Dependency connectivity monitoring (Oracle / Redis / Kafka) - the doc for the two files below. |
 | `grafana/user-provisioning-dependency-connectivity.json` | The connectivity dashboard. Import into Grafana. |
 | `prometheus/user-provisioning-connectivity-rules.yaml` | Connectivity alerts (dependency down, pool exhausted, flapping, slow probes). |
@@ -49,12 +58,14 @@ alert rules stay scoped to this service on a Prometheus shared with the rest of
 the AAA stack.
 
 Per-endpoint health publishes a further ten `api_endpoint_*` series from the
-same catalog - see [HEALTH.md](HEALTH.md#metrics-published).
+same catalog - see [HEALTH.md](HEALTH.md#metrics-published). The request timer
+also carries histogram buckets and per-request exemplars - see
+[RESPONSE-TIME.md](RESPONSE-TIME.md#metrics-published).
 
 ## Scraping
 
-Both dashboards read the same `/actuator/prometheus` endpoint, so there is one
-scrape to set up. Check the label your Service actually carries, then apply the
+All three dashboards read the same `/actuator/prometheus` endpoint, so there is
+one scrape to set up. Check the label your Service actually carries, then apply the
 ServiceMonitor:
 
 ```sh
@@ -75,7 +86,14 @@ curl -s localhost:8089/actuator/prometheus | grep api_endpoint_info
 Nine lines should come back, one per endpoint in the catalog. If it is empty,
 nothing downstream will work - check `monitoring.api.enabled` first.
 
-From here, [HEALTH.md](HEALTH.md#setting-it-up) and
+One thing response time needs that the others do not: Prometheus must be
+started with `--enable-feature=exemplar-storage` for the individual request
+points to survive the scrape. Nothing errors without it - the percentile panels
+still draw, they just have no points on them. See
+[RESPONSE-TIME.md](RESPONSE-TIME.md#what-has-to-be-true-of-prometheus).
+
+From here, [HEALTH.md](HEALTH.md#setting-it-up),
+[RESPONSE-TIME.md](RESPONSE-TIME.md#setting-it-up) and
 [CONNECTIVITY.md](CONNECTIVITY.md) each cover their own alerts and dashboard.
 
 ## Changing the catalog
@@ -111,5 +129,6 @@ endpoint variable is populated from the catalog.
 `monitoring.api.enabled: false` drops the `api` tag, the `microservice` common
 tag and `api_endpoint_info` - and takes per-endpoint health with it, since health
 reads the same catalog. To turn off health alone, use
-`monitoring.api.health.enabled: false`. `http_server_requests` keeps working with
-its stock Spring Boot tags either way.
+`monitoring.api.health.enabled: false`, and for per-request response time,
+`monitoring.api.response-time.enabled: false`. `http_server_requests` keeps
+working with its stock Spring Boot tags either way.

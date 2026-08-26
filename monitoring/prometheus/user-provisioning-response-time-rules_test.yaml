@@ -1,0 +1,252 @@
+# promtool unit test for the response time recording rules and alerts.
+#
+# The fixture is four endpoints, each standing for one case the rules have to
+# tell apart:
+#
+#   fast_endpoint    every request under a second           -> no alert
+#   slow_endpoint    p99 in the 3-5s band                   -> Slow, not VerySlow
+#   very_slow_endpoint  p99 in the 5-10s band               -> Slow and VerySlow
+#   spiky_endpoint   fast p99, one 12 second request        -> RequestExtremelySlow only
+#
+# spiky_endpoint is the case the whole dashboard exists for, and the reason none
+# of these rules read an average. Its percentiles are healthy because almost
+# every request is fast; its average would be healthier still, because the one
+# slow request is divided by all of them. Only the max series - a single real
+# request, not a statistic - says that somebody waited twelve seconds.
+#
+# A second test covers the histogram going missing, which needs a fixture with
+# no bucket series at all and so cannot share the one above.
+#
+# The rules ship as a PrometheusRule custom resource, which promtool cannot read
+# directly, so extract the spec first:
+#
+#   python3 -c "import yaml; \
+#     yaml.safe_dump(yaml.safe_load(open('user-provisioning-response-time-rules.yaml'))['spec'], \
+#                    open('response-time-rules.yaml','w'), sort_keys=False)"
+#   promtool test rules user-provisioning-response-time-rules_test.yaml
+#   rm response-time-rules.yaml
+rule_files:
+  - response-time-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------------
+  # Slow endpoints, and the fast one that must stay quiet next to them.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      # --- fast_endpoint: 1 req/s, all of them under a second ----------------
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="fast_endpoint", le="1.0"}'
+        values: '0+60x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="fast_endpoint", le="3.0"}'
+        values: '0+60x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="fast_endpoint", le="5.0"}'
+        values: '0+60x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="fast_endpoint", le="+Inf"}'
+        values: '0+60x30'
+      - series: 'http_server_requests_seconds_max{microservice="airtel-aaa-user-provisioning-service", api="fast_endpoint"}'
+        values: '0.4+0x30'
+
+      # --- slow_endpoint: 1 req/s, every one of them between 3s and 5s -------
+      # Nothing lands in the 1s or 3s buckets, so p99 interpolates inside the
+      # 3s-5s band and comes out at 4.98: over the warning threshold, under the
+      # critical one.
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="slow_endpoint", le="1.0"}'
+        values: '0+0x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="slow_endpoint", le="3.0"}'
+        values: '0+0x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="slow_endpoint", le="5.0"}'
+        values: '0+60x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="slow_endpoint", le="+Inf"}'
+        values: '0+60x30'
+      - series: 'http_server_requests_seconds_max{microservice="airtel-aaa-user-provisioning-service", api="slow_endpoint"}'
+        values: '4.9+0x30'
+
+      # --- very_slow_endpoint: every request between 5s and 10s --------------
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="very_slow_endpoint", le="1.0"}'
+        values: '0+0x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="very_slow_endpoint", le="5.0"}'
+        values: '0+0x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="very_slow_endpoint", le="10.0"}'
+        values: '0+60x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="very_slow_endpoint", le="+Inf"}'
+        values: '0+60x30'
+      - series: 'http_server_requests_seconds_max{microservice="airtel-aaa-user-provisioning-service", api="very_slow_endpoint"}'
+        values: '9.8+0x30'
+
+      # --- spiky_endpoint: healthy percentiles hiding one 12 second request --
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="spiky_endpoint", le="1.0"}'
+        values: '0+60x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="spiky_endpoint", le="+Inf"}'
+        values: '0+60x30'
+      - series: 'http_server_requests_seconds_max{microservice="airtel-aaa-user-provisioning-service", api="spiky_endpoint"}'
+        values: '12+0x30'
+
+      # A second pod serving fast_endpoint, and serving it slowly. max() has to
+      # report the worse of the two: one slow pod is slow for whatever share of
+      # traffic lands on it.
+      - series: 'http_server_requests_seconds_max{microservice="airtel-aaa-user-provisioning-service", api="fast_endpoint", pod="fast-pod-b"}'
+        values: '0.5+0x30'
+
+    promql_expr_test:
+      # The percentiles come off the buckets, not off an average.
+      - expr: api:response_time_seconds:p99
+        eval_time: 10m
+        exp_samples:
+          - labels: 'api:response_time_seconds:p99{api="fast_endpoint"}'
+            value: 0.99
+          - labels: 'api:response_time_seconds:p99{api="slow_endpoint"}'
+            value: 4.98
+          - labels: 'api:response_time_seconds:p99{api="very_slow_endpoint"}'
+            value: 9.95
+          - labels: 'api:response_time_seconds:p99{api="spiky_endpoint"}'
+            value: 0.99
+
+      # The point of the whole exercise: spiky_endpoint's p99 is under a second
+      # while a real request took twelve.
+      - expr: api:response_time_seconds_max:max
+        eval_time: 10m
+        exp_samples:
+          - labels: 'api:response_time_seconds_max:max{api="fast_endpoint"}'
+            value: 0.5
+          - labels: 'api:response_time_seconds_max:max{api="slow_endpoint"}'
+            value: 4.9
+          - labels: 'api:response_time_seconds_max:max{api="very_slow_endpoint"}'
+            value: 9.8
+          - labels: 'api:response_time_seconds_max:max{api="spiky_endpoint"}'
+            value: 12
+
+    alert_rule_test:
+      # Nothing has been slow long enough yet at 5 minutes.
+      - eval_time: 5m
+        alertname: UserProvisioningEndpointSlow
+        exp_alerts: []
+
+      # The critical threshold clears its 5m hold first.
+      - eval_time: 12m
+        alertname: UserProvisioningEndpointVerySlow
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: airtel-aaa-user-provisioning-service
+              api: very_slow_endpoint
+            exp_annotations:
+              summary: 'very_slow_endpoint p99 response time is 9.95s'
+              description: >-
+                More than one request in a hundred to very_slow_endpoint has been taking over 5
+                seconds for 5 minutes. Callers are very likely timing out, and a timed-out caller
+                that is retrying makes this worse rather than better. Check the dependency
+                connectivity dashboard first - probe latency climbing across Oracle, Redis or
+                Kafka explains every endpoint at once.
+
+      # At 20 minutes both slow endpoints have held for 10, and the fast one and
+      # the spiky one are still absent - a spike in one request is not a slow
+      # endpoint.
+      - eval_time: 20m
+        alertname: UserProvisioningEndpointSlow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: airtel-aaa-user-provisioning-service
+              api: slow_endpoint
+            exp_annotations:
+              summary: 'slow_endpoint p99 response time is 4.98s'
+              description: >-
+                More than one request in a hundred to slow_endpoint has been taking over 2
+                seconds for 10 minutes. The endpoint is serving, so health will still read
+                healthy - this is the slow-but-working case that only response time shows. Open
+                the API response time dashboard and read the exemplars on the p99 panel: each one
+                names a real request by its trace_id, which is the request id in the application
+                logs and in ACTION_LOG. If every endpoint moved together, look at the dependency
+                connectivity dashboard rather than at this endpoint.
+          - exp_labels:
+              severity: warning
+              service: airtel-aaa-user-provisioning-service
+              api: very_slow_endpoint
+            exp_annotations:
+              summary: 'very_slow_endpoint p99 response time is 9.95s'
+              description: >-
+                More than one request in a hundred to very_slow_endpoint has been taking over 2
+                seconds for 10 minutes. The endpoint is serving, so health will still read
+                healthy - this is the slow-but-working case that only response time shows. Open
+                the API response time dashboard and read the exemplars on the p99 panel: each one
+                names a real request by its trace_id, which is the request id in the application
+                logs and in ACTION_LOG. If every endpoint moved together, look at the dependency
+                connectivity dashboard rather than at this endpoint.
+
+      # Only spiky_endpoint and very_slow_endpoint have an individual request
+      # over 10 seconds. slow_endpoint's worst was 4.9, so a slow endpoint does
+      # not imply an extreme request either.
+      - eval_time: 20m
+        alertname: UserProvisioningRequestExtremelySlow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: airtel-aaa-user-provisioning-service
+              api: spiky_endpoint
+            exp_annotations:
+              summary: 'A single request to spiky_endpoint took 12s'
+              description: >-
+                At least one individual request to spiky_endpoint has taken over 10 seconds.
+                This is not a percentile - one caller waited this long. It will not necessarily
+                show in p99, and it will not show in an average at all, which is why it has an
+                alert of its own. The slow request log names it: grep the pod logs for
+                "Slow request" and the matching requestId.
+
+      # The histogram is present throughout, so the missing-histogram alert must
+      # stay silent no matter how slow things get.
+      - eval_time: 20m
+        alertname: UserProvisioningResponseTimeHistogramMissing
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # The silent failure: requests are being served, but the buckets are gone.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="get_user"}'
+        values: '0+60x30'
+
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UserProvisioningResponseTimeHistogramMissing
+        exp_alerts: []
+
+      - eval_time: 20m
+        alertname: UserProvisioningResponseTimeHistogramMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: airtel-aaa-user-provisioning-service
+              # absent() carries through the equality matchers of the selector it
+              # was given, so the alert names the service twice over.
+              microservice: airtel-aaa-user-provisioning-service
+            exp_annotations:
+              summary: 'Response time histogram is not being exported'
+              description: >-
+                airtel-aaa-user-provisioning-service is serving requests but exporting no
+                http_server_requests_seconds_bucket series, so every response time panel and
+                every percentile rule is blank rather than wrong. The cause is almost always
+                management.metrics.distribution.slo missing from the active profile's
+                application.yml. Per-request exemplars go with it, since an exemplar is carried
+                by a bucket.
+
+      # No buckets means no percentiles, which must be absence rather than a
+      # zero that would read as a fast service.
+      - eval_time: 20m
+        alertname: UserProvisioningEndpointSlow
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # An idle service has no series at all, and that is not a fault.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="get_user"}'
+        values: '100+0x30'
+
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: UserProvisioningResponseTimeHistogramMissing
+        exp_alerts: []

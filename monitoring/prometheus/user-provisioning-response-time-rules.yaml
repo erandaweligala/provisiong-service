@@ -1,0 +1,175 @@
+# Prometheus / Thanos rules for API response time of
+# airtel-aaa-user-provisioning-service.
+#
+# Apply as a PrometheusRule on OpenShift:
+#     oc -n airtel-aaa apply -f user-provisioning-response-time-rules.yaml
+#
+# On a plain Prometheus, copy the `spec:` block into a rule_files entry instead.
+#
+# Nothing here alerts on an average response time, and that is the point. An
+# average is the wrong summary of a latency distribution twice over: it is
+# dragged around by the slow tail so it cannot describe the typical request, and
+# it is diluted by volume so it cannot describe the slow one. A service serving
+# ten thousand requests in 50ms and ten in thirty seconds averages out to
+# something that looks fine and is not true of any request that was actually
+# made.
+#
+# So these rules read two things that are not averages. The percentiles come off
+# the histogram buckets, which is a real statement about a share of requests -
+# `p99 above 2s` means one request in a hundred waited longer than that.
+# `http_server_requests_seconds_max` is not a statistic at all: it is the
+# duration of the single slowest request Micrometer saw in its window, and it is
+# the only series here that a flood of fast requests cannot hide.
+#
+# Every rule is scoped by the `microservice` label ApiMonitoringConfig adds to
+# all meters, so they stay put on a Prometheus shared with the rest of the AAA
+# stack, and every one aggregates across pods with max(): one slow pod is a slow
+# service for whatever share of traffic lands on it.
+#
+# The thresholds below are the only numbers here that are a judgement rather than
+# a measurement. They are a starting point deliberately set above normal
+# behaviour rather than at it - tune them once the dashboard has shown you what
+# this service's p99 actually does under load.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: airtel-aaa-user-provisioning-response-time
+  namespace: airtel-aaa
+  labels:
+    app: airtel-aaa-user-provisioning-service
+    role: alert-rules
+spec:
+  groups:
+    - name: user-provisioning-response-time-recording
+      interval: 30s
+      rules:
+        # The percentiles, per endpoint, across all pods. Recorded rather than
+        # computed in each alert because histogram_quantile over a 5m rate of
+        # every bucket is the most expensive query on the dashboard, and three
+        # alerts would otherwise run it three times over.
+        #
+        # Accuracy is bounded by the buckets in
+        # management.metrics.distribution.slo: a p99 reported as 750ms means
+        # "between 500ms and 750ms", not 750ms exactly. Adding buckets narrows
+        # that and costs a series per endpoint each time.
+        - record: api:response_time_seconds:p50
+          expr: |
+            histogram_quantile(0.50, sum by (api, le) (
+              rate(http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service"}[5m])
+            ))
+
+        - record: api:response_time_seconds:p95
+          expr: |
+            histogram_quantile(0.95, sum by (api, le) (
+              rate(http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service"}[5m])
+            ))
+
+        - record: api:response_time_seconds:p99
+          expr: |
+            histogram_quantile(0.99, sum by (api, le) (
+              rate(http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service"}[5m])
+            ))
+
+        # The slowest single request per endpoint, from the worst pod. Not
+        # derived from the buckets and not interpolated: one request took this
+        # long. Micrometer decays this over its own window, so it falls back to
+        # zero on its own once the slow requests stop.
+        - record: api:response_time_seconds_max:max
+          expr: |
+            max by (api) (
+              http_server_requests_seconds_max{microservice="airtel-aaa-user-provisioning-service"}
+            )
+
+    - name: user-provisioning-response-time-alerts
+      interval: 30s
+      rules:
+        - alert: UserProvisioningEndpointSlow
+          # Held for 10 minutes because a p99 over a 5m rate already smooths a
+          # bad minute, and anything that survives both is a trend rather than a
+          # spike.
+          expr: |
+            api:response_time_seconds:p99 > 2
+          for: 10m
+          labels:
+            severity: warning
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: '{{ $labels.api }} p99 response time is {{ $value | humanizeDuration }}'
+            description: >-
+              More than one request in a hundred to {{ $labels.api }} has been taking over 2
+              seconds for 10 minutes. The endpoint is serving, so health will still read
+              healthy - this is the slow-but-working case that only response time shows. Open
+              the API response time dashboard and read the exemplars on the p99 panel: each one
+              names a real request by its trace_id, which is the request id in the application
+              logs and in ACTION_LOG. If every endpoint moved together, look at the dependency
+              connectivity dashboard rather than at this endpoint.
+
+        - alert: UserProvisioningEndpointVerySlow
+          # Fires faster than the warning above and at a threshold no caller
+          # should be waiting through. At 5s the callers upstream are timing out,
+          # which makes this an outage that availability metrics will not show:
+          # a request that eventually returns 200 counts as a success no matter
+          # how long it took.
+          expr: |
+            api:response_time_seconds:p99 > 5
+          for: 5m
+          labels:
+            severity: critical
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: '{{ $labels.api }} p99 response time is {{ $value | humanizeDuration }}'
+            description: >-
+              More than one request in a hundred to {{ $labels.api }} has been taking over 5
+              seconds for 5 minutes. Callers are very likely timing out, and a timed-out caller
+              that is retrying makes this worse rather than better. Check the dependency
+              connectivity dashboard first - probe latency climbing across Oracle, Redis or
+              Kafka explains every endpoint at once.
+
+        - alert: UserProvisioningRequestExtremelySlow
+          # The one alert here that a busy service cannot dilute. A single 30
+          # second request among ten thousand fast ones moves no percentile at
+          # all, and moves no average worth mentioning, but it is a real caller
+          # who waited 30 seconds.
+          expr: |
+            api:response_time_seconds_max:max > 10
+          for: 5m
+          labels:
+            severity: warning
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: 'A single request to {{ $labels.api }} took {{ $value | humanizeDuration }}'
+            description: >-
+              At least one individual request to {{ $labels.api }} has taken over 10 seconds.
+              This is not a percentile - one caller waited this long. It will not necessarily
+              show in p99, and it will not show in an average at all, which is why it has an
+              alert of its own. The slow request log names it: grep the pod logs for
+              "Slow request" and the matching requestId.
+
+        - alert: UserProvisioningResponseTimeHistogramMissing
+          # The silent failure this whole setup is exposed to. Every panel and
+          # every rule above reads _bucket series, which exist only because
+          # management.metrics.distribution.slo is configured. Drop that block
+          # and the service keeps serving, keeps exporting _count and _sum, and
+          # every response time panel quietly goes blank - which on a dashboard
+          # is indistinguishable from a service nobody is calling.
+          #
+          # Guarded by the request count so an idle service, which legitimately
+          # has no series at all, does not trip it.
+          expr: |
+            absent(http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service"})
+            and on() (
+              sum(rate(http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service"}[5m])) > 0
+            )
+          for: 15m
+          labels:
+            severity: warning
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: 'Response time histogram is not being exported'
+            description: >-
+              airtel-aaa-user-provisioning-service is serving requests but exporting no
+              http_server_requests_seconds_bucket series, so every response time panel and
+              every percentile rule is blank rather than wrong. The cause is almost always
+              management.metrics.distribution.slo missing from the active profile's
+              application.yml. Per-request exemplars go with it, since an exemplar is carried
+              by a bucket.

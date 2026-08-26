@@ -21,6 +21,16 @@ spec:
     matchLabels:
       app: airtel-aaa-user-provisioning-service
   endpoints:
+    # Nothing here asks for exemplars, and nothing needs to. Prometheus already
+    # negotiates the OpenMetrics exposition that carries them; what decides
+    # whether they are kept is `enableFeatures: [exemplar-storage]` on the
+    # Prometheus resource itself, not this ServiceMonitor. Without it the
+    # response time dashboard still draws its percentile lines and simply has no
+    # individual request points on them - see ../RESPONSE-TIME.md.
+    #
+    # The scrape interval is also the resolution of those points: one exemplar
+    # per bucket per scrape is the ceiling, so a longer interval names fewer
+    # real requests.
     - port: http                     # name of the Service port, not its number
       path: /actuator/prometheus
       scheme: http
