@@ -10,34 +10,36 @@ every declared dependency up? ---> EndpointHealthMonitor --> /actuator/prometheu
 5xx ratio over the window?    --/     (every 15s)         \-> GET /monitoring/endpoints
 ```
 
-This is the third of the three monitoring documents here, and the one that
-answers "is this endpoint alright?":
+This is one of the two monitoring documents here, and the one that answers
+"is this endpoint alright?":
 
 | Document | Question it answers |
 | --- | --- |
-| [README.md](README.md) | What share of requests to each endpoint failed, and how long they took. |
 | **HEALTH.md** (this file) | Whether each endpoint is fit to serve - including the ones nobody called. |
 | [CONNECTIVITY.md](CONNECTIVITY.md) | Whether Oracle, Redis and Kafka are reachable at all. |
 
-## Why availability was not enough
+[README.md](README.md) covers what the two have in common: the endpoint catalog
+and the scrape.
 
-Availability is a ratio of requests: the share that did not answer 5xx. That
-makes it exactly as informative as the traffic behind it, and three real
-situations slip through it entirely.
+## Why a request ratio was not enough
+
+The obvious way to monitor an endpoint is availability - the share of requests
+that did not answer 5xx. That makes it exactly as informative as the traffic
+behind it, and three real situations slip through it entirely.
 
 **An endpoint nobody called reads 100%.** No requests, no failures, 100%
 available - and the database it reads from may have been unreachable for an
-hour. The availability dashboard is explicit that 100% over 0 req/s means
-"nothing failed", not "this works". Health is what turns that into an answer.
+hour. 100% over 0 req/s means "nothing failed", not "this works". Health is what
+turns that into an answer.
 
 **An endpoint with no handler reads 100%.** If a controller path is renamed and
 the catalog in `application.yml` is not, every call to it answers 404. A 404 is
-a client error, so availability stays perfect while every caller of that
+a client error, so the ratio stays perfect while every caller of that
 endpoint is broken. `ApiMonitoringCatalogTest` catches this in the build; it
 cannot catch a catalog and a war that came from different commits, or a
 controller excluded by a profile in one environment.
 
-**A dependency outage looks like an endpoint problem.** Availability says
+**A dependency outage looks like an endpoint problem.** A request ratio says
 `create_user` is failing. It does not say Kafka is down and that six other
 endpoints are about to follow.
 
@@ -54,7 +56,7 @@ the **reason** - and a cause is more useful on a page than a symptom.
 | --- | --- | --- | --- |
 | 1 | Is a handler for this method and path mapped in this build? | `not_mapped` | Spring's `RequestMappingHandlerMapping`, read once at startup |
 | 2 | Is every dependency the endpoint declares reachable? | `dependency_down` | The connectivity probes that already run every 15s |
-| 3 | Is the 5xx ratio over the window under the thresholds? | `errors` | The same `http_server_requests` timer availability uses |
+| 3 | Is the 5xx ratio over the window under the thresholds? | `errors` | The `http_server_requests` timer Spring Boot already publishes |
 
 None of them costs anything new. Check 1 is one pass over data Spring already
 holds, check 2 reuses [CONNECTIVITY.md](CONNECTIVITY.md)'s probes rather than
@@ -88,7 +90,7 @@ lets the alerts fire on the reason series and carry `reason` as a label.
 | --- | --- | --- |
 | `ok` | Healthy | Nothing. Traffic, none of it failing. |
 | `idle` | Healthy | Nothing. No traffic, and nothing else wrong. |
-| `errors` | Degraded or Unhealthy | The endpoint is failing on its own. Start at the availability dashboard and the status mix panel. |
+| `errors` | Degraded or Unhealthy | The endpoint is failing on its own. Start at the *5xx share by endpoint* panel, then the pod logs. |
 | `dependency_down` | Unhealthy | Something it needs is unreachable. Go to the connectivity dashboard - this endpoint is a symptom. |
 | `not_mapped` | Unhealthy | The build does not serve this path. `application.yml` and the controllers were changed apart. |
 | `unknown` | Unknown | The evaluation schedule is not running. Check the log for `Endpoint health evaluation failed`. |
@@ -103,7 +105,7 @@ as its own reason rather than folded into `ok` precisely so the difference stays
 visible, on the dashboard and in the alert labels.
 
 Turning off `use-dependency-state` removes most of the evidence behind that
-claim, and idle then means little more than availability's 100%.
+claim, and idle then means little more than a 100% request ratio would.
 
 ## Dependencies are declared per endpoint
 
@@ -157,8 +159,8 @@ monitoring:
       verify-mappings: true
 ```
 
-`window-ms` matches the `[5m]` the availability rules use, so the two signals
-move together instead of one lagging the other.
+`window-ms` is a 5 minute sliding window, long enough that a single failure does
+not swing the ratio and short enough that a recovery shows up promptly.
 
 `minimum-requests` is the one worth understanding. One failure out of two
 requests is a 50% error ratio, which is a fact about the sample size and not
@@ -186,7 +188,7 @@ All tagged `api`, plus the `microservice` common tag.
 
 Cardinality is bounded by the catalog: nine endpoints, six reasons, at most three
 dependencies each. Traffic to an uncatalogued path is tagged `api="other"` by
-availability monitoring and is not evaluated here at all.
+the endpoint catalog and is not evaluated here at all.
 
 Every series exists from startup, before any traffic - so an endpoint missing
 from the dashboard means the catalog is not being scraped, not that the endpoint
@@ -245,8 +247,9 @@ series each. Zero means `monitoring.api.health.enabled` or `monitoring.api.enabl
 is off. A `status` of `unknown` within the first 15 seconds of startup is
 expected; after a minute it is not, and the pod log will say why.
 
-**2. Scrape it.** Nothing new - the same ServiceMonitor already used for
-availability covers these metrics.
+**2. Scrape it.** Nothing new - the ServiceMonitor in
+`prometheus/servicemonitor.yaml` covers these metrics. See
+[README.md](README.md#scraping).
 
 **3. Alerts.**
 
@@ -297,11 +300,11 @@ whether or not step 3 was done.
 The order to read them in during an incident: **Worst endpoint** to see if
 anything is wrong, **Health by endpoint** to see how much, **Endpoints by
 reason** to see what kind, and then either the connectivity dashboard
-(`dependency_down`) or the availability dashboard (`errors`).
+(`dependency_down`) or the *5xx share by endpoint* panel (`errors`).
 
 ## Changing the catalog
 
-Adding an endpoint is the same edit as for availability - see
+Adding an endpoint is an edit to the shared catalog - see
 [README.md](README.md#changing-the-catalog) - plus a `dependencies` list. Both
 `application.yml` and `application-telco_aaa_dev.yml` must be edited, and
 `ApiMonitoringCatalogTest` fails the build if an entry stops matching a real
@@ -314,11 +317,10 @@ endpoint variable is populated from `api_endpoint_health`.
 
 `monitoring.api.health.enabled: false` stops the evaluation and drops every
 `api_endpoint_*` health series; `GET /monitoring/endpoints` then answers 503 with
-`status: unknown` and says so. Availability, response time and connectivity
-monitoring are unaffected.
+`status: unknown` and says so. Connectivity monitoring is unaffected.
 
-`monitoring.api.enabled: false` turns off availability monitoring and takes
-health with it - health reads the same catalog.
+`monitoring.api.enabled: false` turns off the endpoint catalog and takes health
+with it - health reads that catalog.
 
 The two checks can also be turned off individually:
 `use-dependency-state: false` drops check 2, and health falls back to traffic

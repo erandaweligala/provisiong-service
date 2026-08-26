@@ -35,11 +35,11 @@ import java.util.Set;
 import java.util.function.Supplier;
 
 /**
- * Wires per-endpoint health onto the same Prometheus registry the availability
+ * Wires per-endpoint health onto the same Prometheus registry the endpoint
  * metrics go to. Imported by {@link ApiMonitoringConfig}, so it only comes up when
  * {@code monitoring.api.enabled} is true and the endpoint catalog exists.
  *
- * <p>Health needs two things availability does not: the state of the dependencies
+ * <p>Health needs two things the request metrics do not carry: the state of the dependencies
  * each endpoint declares, and the set of paths this instance actually serves. Both
  * are looked up through {@link ObjectProvider}, and both degrade to "assume fine"
  * when unavailable - a health check that cannot run must not manufacture an

@@ -10,11 +10,11 @@
 #   missing_endpoint   catalogued but not mapped in the build-> Unhealthy + NotMapped, reason not_mapped
 #   flappy_endpoint    degraded, changing state all hour     -> Degraded + Flapping
 #
-# The case worth being explicit about is idle_endpoint. It is why this file
-# exists next to the availability test rather than inside it: an endpoint with no
-# traffic has no request series at all, so availability has nothing to compute
-# and falls back to 100%, while health reaches a verdict from the dependency and
-# mapping checks and can therefore disagree - correctly - with that 100%.
+# The case worth being explicit about is idle_endpoint. An endpoint with no
+# traffic has no request series at all, so any ratio computed from requests has
+# nothing to work with, while health reaches a verdict from the dependency and
+# mapping checks - which is the whole point of evaluating it in the application
+# rather than in PromQL.
 #
 # The rules ship as a PrometheusRule custom resource, which promtool cannot read
 # directly, so extract the spec first:

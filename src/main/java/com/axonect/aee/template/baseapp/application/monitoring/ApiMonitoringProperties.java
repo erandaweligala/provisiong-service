@@ -19,8 +19,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Binds the {@code monitoring.api} block that drives REST endpoint availability
- * monitoring. Three settings, no thresholds and nothing to tune.
+ * Binds the {@code monitoring.api} block that drives the REST endpoint
+ * monitoring catalog. Three settings, no thresholds and nothing to tune.
  */
 @Getter
 @Setter
@@ -41,7 +41,7 @@ public class ApiMonitoringProperties {
     private String microservice = "airtel-aaa-user-provisioning-service";
 
     /**
-     * The endpoints shown on the availability dashboard.
+     * The endpoints the monitoring catalog publishes.
      */
     private List<MonitoredEndpoint> endpoints = new ArrayList<>();
 }

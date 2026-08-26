@@ -260,11 +260,12 @@ management:
         enabled: true
   metrics:
     distribution:
-      # Publishes http_server_requests_seconds_bucket, which is what lets Grafana
-      # work out a response time percentile per endpoint. These are plain
+      # Publishes http_server_requests_seconds_bucket, so a response time
+      # percentile per endpoint can be read off the histogram. These are plain
       # histogram buckets, not per-endpoint budgets: nothing alerts on them and no
-      # endpoint has a target of its own. Keep the list short - every bucket is
-      # another time series per endpoint. See monitoring/README.md.
+      # endpoint has a target of its own. No dashboard or rule in monitoring/
+      # reads them today - they are here for ad hoc queries in Prometheus. Keep
+      # the list short: every bucket is another time series per endpoint.
       slo:
         "[http.server.requests]": 25ms,50ms,100ms,200ms,300ms,500ms,750ms,1s,2s,3s,5s,10s
 
@@ -278,10 +279,10 @@ radius:
   server:
     base-url: http://airtel-aaa-radius-server-service.csg-aaa-app.cluster.local:8080
 # ---------------------------------------------------------------------------
-# REST endpoint availability monitoring (Grafana)
+# REST endpoint monitoring catalog (Grafana)
 #
 # Each entry becomes an `api` tag on http_server_requests, which is what the
-# Grafana dashboard in monitoring/grafana groups by, and an api_endpoint_info
+# Grafana dashboards in monitoring/grafana group by, and an api_endpoint_info
 # series so the endpoint shows up even before its first request.
 #
 # `uris` must hold the Spring URI templates of the handler - path variable
@@ -383,7 +384,7 @@ monitoring:
           - database
 
     # -----------------------------------------------------------------------
-    # Per-endpoint health. Availability says what share of requests failed;
+    # Per-endpoint health. A ratio of requests says what share of them failed;
     # health says whether the endpoint is fit to serve at all, which is the
     # question an endpoint with no traffic cannot otherwise answer. Three
     # checks decide it - the handler is mapped here, every dependency below is

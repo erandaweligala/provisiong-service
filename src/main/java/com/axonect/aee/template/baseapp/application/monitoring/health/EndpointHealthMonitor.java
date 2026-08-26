@@ -48,7 +48,7 @@ import java.util.function.Supplier;
  * <p>None of the three costs anything new. The mapping check reads Spring's own
  * handler mapping once at startup, the dependency check reuses the connectivity
  * probes that already run, and the error ratio is read off the same
- * {@code http.server.requests} timer the availability dashboard uses - sampled here
+ * {@code http.server.requests} timer Spring Boot publishes - sampled here
  * as a sliding window rather than a Prometheus rate, so the verdict is available
  * inside the JVM and on {@code GET /monitoring/endpoints} without a round trip to
  * Prometheus.</p>

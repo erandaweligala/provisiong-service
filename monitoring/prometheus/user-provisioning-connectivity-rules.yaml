@@ -11,7 +11,7 @@
 # `connectivity.service-name` sets - these rules sit alongside the DB write service's
 # `AaaDbWrite*` rules without colliding.
 #
-# There are no recording rules here: unlike availability, nothing needs computing.
+# There are no recording rules here: nothing needs computing.
 # dependency_up is already the answer.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule

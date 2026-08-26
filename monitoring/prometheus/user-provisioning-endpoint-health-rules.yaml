@@ -6,13 +6,11 @@
 #
 # On a plain Prometheus, copy the `spec:` block into a rule_files entry instead.
 #
-# These are the health rules. Availability - the share of requests that did not
-# answer 5xx - is a different question with its own file,
-# user-provisioning-endpoint-rules.yaml. The two are complementary and neither
-# replaces the other: availability can only speak about endpoints that were
-# called, and reads a serene 100% for one that was not; health is evaluated in
-# the application every 15s from checks that do not need traffic, so a quiet
-# endpoint whose database has gone still goes red here.
+# These are the health rules. They deliberately do not compute a ratio of
+# requests: a ratio can only speak about endpoints that were called, and reads a
+# serene 100% for one that was not. Health is evaluated in the application every
+# 15s from checks that do not need traffic, so a quiet endpoint whose database
+# has gone still goes red here.
 #
 # Every rule is scoped by the `microservice` label ApiMonitoringConfig adds to
 # all meters, so they stay put on a Prometheus shared with the rest of the AAA
@@ -164,9 +162,11 @@ spec:
               do not silence this, an endpoint this unstable is not serving well.
 
         - alert: UserProvisioningNoEndpointHealth
-          # The counterpart of UserProvisioningNoMetrics for this file. While it
-          # fires nothing else here can, because every rule above needs the
-          # series that is missing.
+          # The scrape-is-broken alert for the whole endpoint catalog: every rule
+          # above needs the series that is missing, so while this fires nothing
+          # else here can. Note it goes quiet if health alone is switched off
+          # with monitoring.api.health.enabled while the pods keep serving -
+          # that is a deliberate switch, not an outage.
           expr: |
             absent(api_endpoint_health{microservice="airtel-aaa-user-provisioning-service"})
           for: 5m
