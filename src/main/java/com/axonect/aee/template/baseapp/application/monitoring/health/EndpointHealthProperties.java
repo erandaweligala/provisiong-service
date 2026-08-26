@@ -31,7 +31,7 @@ public class EndpointHealthProperties {
 
     /**
      * Master switch for per-endpoint health. When false no {@code api_endpoint_health}
-     * series are published; traffic-derived availability is unaffected.
+     * series are published; the request metrics themselves are unaffected.
      */
     private boolean enabled = true;
 
@@ -39,9 +39,9 @@ public class EndpointHealthProperties {
     private long evaluationIntervalMs = 15_000;
 
     /**
-     * How far back the error ratio looks. Kept at five minutes to match the
-     * {@code [5m]} rate the availability dashboard and recording rules use, so the
-     * two signals move together instead of one lagging the other.
+     * How far back the error ratio looks. Kept at five minutes: long enough that
+     * a single failure does not swing the ratio, short enough that a recovery
+     * shows up promptly.
      */
     private long windowMs = 300_000;
 

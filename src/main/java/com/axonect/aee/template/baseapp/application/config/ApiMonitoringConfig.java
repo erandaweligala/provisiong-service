@@ -28,23 +28,21 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.server.observation.ServerRequestObservationConvention;
 
 /**
- * Wires REST endpoint availability monitoring onto the Prometheus registry that
+ * Wires the REST endpoint monitoring catalog onto the Prometheus registry that
  * Grafana scrapes from {@code /actuator/prometheus}.
  *
- * <p>Availability is read straight off Spring Boot's own request metrics: the
- * share of responses that were not {@code 5xx}. All this configuration adds is
- * two things:</p>
+ * <p>The catalog is what everything downstream groups by. This configuration
+ * adds two things:</p>
  * <ul>
  *   <li>an {@code api} tag on {@code http_server_requests_seconds_count} naming
- *       the catalog entry that served each request - the source of the
- *       availability figure;</li>
+ *       the catalog entry that served each request;</li>
  *   <li>{@code api_endpoint_info}, a constant 1 per catalogued endpoint, so an
  *       endpoint that has taken no traffic still appears on the dashboard
  *       instead of vanishing.</li>
  * </ul>
  *
- * <p>Availability alone cannot say whether a quiet endpoint is well - a ratio of
- * no requests is not a health check - so {@link EndpointHealthConfig} is imported
+ * <p>A ratio of requests alone cannot say whether a quiet endpoint is well - no
+ * requests is not a health check - so {@link EndpointHealthConfig} is imported
  * here to add one. It is imported rather than scanned so that it comes up only
  * with this class, and after the catalog it reads.</p>
  */
@@ -59,7 +57,7 @@ public class ApiMonitoringConfig {
 
     @Bean
     public ApiEndpointRegistry apiEndpointRegistry(ApiMonitoringProperties properties) {
-        log.info("REST endpoint availability monitoring enabled for microservice={}", properties.getMicroservice());
+        log.info("REST endpoint monitoring catalog enabled for microservice={}", properties.getMicroservice());
         return new ApiEndpointRegistry(properties.getEndpoints());
     }
 
@@ -99,7 +97,7 @@ public class ApiMonitoringConfig {
         return meterRegistry -> {
             for (MonitoredEndpoint endpoint : registry.endpoints()) {
                 Gauge.builder(INFO_GAUGE, () -> 1)
-                        .description("Constant 1 for every endpoint in the availability catalog")
+                        .description("Constant 1 for every endpoint in the monitoring catalog")
                         .tag("api", endpoint.getName())
                         .tag("method", endpoint.getMethod() == null ? "UNKNOWN" : endpoint.getMethod())
                         .tag("title", endpoint.getTitle() == null ? endpoint.getName() : endpoint.getTitle())

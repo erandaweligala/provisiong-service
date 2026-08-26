@@ -18,7 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * One REST endpoint on the availability dashboard.
+ * One REST endpoint in the monitoring catalog.
  *
  * <p>Each entry maps one or more Spring request mappings onto a stable metric
  * label, so the dashboard keeps working when a controller path is refactored -
