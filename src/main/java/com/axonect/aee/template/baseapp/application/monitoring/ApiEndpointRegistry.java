@@ -100,8 +100,12 @@ public class ApiEndpointRegistry {
     /**
      * Erases path variable names and trailing slashes so that catalog entries and
      * Micrometer's {@code uri} tag agree on a single spelling.
+     *
+     * <p>Public because it is that single spelling: the endpoint health check
+     * compares the catalog against Spring's live handler mappings, and would find
+     * nothing if it normalised paths even slightly differently from this.</p>
      */
-    static String normalizeUri(String uri) {
+    public static String normalizeUri(String uri) {
         String normalized = PATH_VARIABLE.matcher(uri.trim()).replaceAll("{}");
         if (!normalized.startsWith("/")) {
             normalized = "/" + normalized;

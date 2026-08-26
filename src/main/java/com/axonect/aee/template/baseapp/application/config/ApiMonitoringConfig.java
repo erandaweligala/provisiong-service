@@ -24,6 +24,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.server.observation.ServerRequestObservationConvention;
 
 /**
@@ -41,11 +42,17 @@ import org.springframework.http.server.observation.ServerRequestObservationConve
  *       endpoint that has taken no traffic still appears on the dashboard
  *       instead of vanishing.</li>
  * </ul>
+ *
+ * <p>Availability alone cannot say whether a quiet endpoint is well - a ratio of
+ * no requests is not a health check - so {@link EndpointHealthConfig} is imported
+ * here to add one. It is imported rather than scanned so that it comes up only
+ * with this class, and after the catalog it reads.</p>
  */
 @Slf4j
 @Configuration
 @EnableConfigurationProperties(ApiMonitoringProperties.class)
 @ConditionalOnProperty(prefix = "monitoring.api", name = "enabled", havingValue = "true", matchIfMissing = true)
+@Import(EndpointHealthConfig.class)
 public class ApiMonitoringConfig {
 
     private static final String INFO_GAUGE = "api.endpoint.info";

@@ -1,0 +1,282 @@
+# promtool unit test for the endpoint health recording rules and alerts.
+#
+# The fixture is six endpoints, each standing for one case the rules have to get
+# right:
+#
+#   healthy_endpoint   serving cleanly                       -> no alert
+#   idle_endpoint      no traffic, dependencies up, mapped   -> no alert (health 3, reason idle)
+#   broken_endpoint    failing on its own                    -> Unhealthy, reason errors
+#   blocked_endpoint   a required dependency is down         -> Unhealthy, reason dependency_down
+#   missing_endpoint   catalogued but not mapped in the build-> Unhealthy + NotMapped, reason not_mapped
+#   flappy_endpoint    degraded, changing state all hour     -> Degraded + Flapping
+#
+# The case worth being explicit about is idle_endpoint. It is why this file
+# exists next to the availability test rather than inside it: an endpoint with no
+# traffic has no request series at all, so availability has nothing to compute
+# and falls back to 100%, while health reaches a verdict from the dependency and
+# mapping checks and can therefore disagree - correctly - with that 100%.
+#
+# The rules ship as a PrometheusRule custom resource, which promtool cannot read
+# directly, so extract the spec first:
+#
+#   python3 -c "import yaml; \
+#     yaml.safe_dump(yaml.safe_load(open('user-provisioning-endpoint-health-rules.yaml'))['spec'], \
+#                    open('health-rules.yaml','w'), sort_keys=False)"
+#   promtool test rules user-provisioning-endpoint-health-rules_test.yaml
+#   rm health-rules.yaml
+rule_files:
+  - health-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      # --- api_endpoint_health: the state of each endpoint ------------------
+      - series: 'api_endpoint_health{microservice="airtel-aaa-user-provisioning-service", api="healthy_endpoint", title="Healthy", method="GET"}'
+        values: '3+0x20'
+      - series: 'api_endpoint_health{microservice="airtel-aaa-user-provisioning-service", api="idle_endpoint", title="Idle", method="GET"}'
+        values: '3+0x20'
+      - series: 'api_endpoint_health{microservice="airtel-aaa-user-provisioning-service", api="broken_endpoint", title="Broken", method="POST"}'
+        values: '1+0x20'
+      - series: 'api_endpoint_health{microservice="airtel-aaa-user-provisioning-service", api="blocked_endpoint", title="Blocked", method="POST"}'
+        values: '1+0x20'
+      - series: 'api_endpoint_health{microservice="airtel-aaa-user-provisioning-service", api="missing_endpoint", title="Missing", method="DELETE"}'
+        values: '1+0x20'
+      - series: 'api_endpoint_health{microservice="airtel-aaa-user-provisioning-service", api="flappy_endpoint", title="Flappy", method="PATCH"}'
+        values: '2+0x20'
+
+      # A second pod serving healthy_endpoint, and serving it badly. min() has
+      # to report the worse of the two: one bad pod is an outage for whatever
+      # share of traffic the load balancer sends to it.
+      - series: 'api_endpoint_health{microservice="airtel-aaa-user-provisioning-service", api="two_pod_endpoint", title="Two pods", method="GET", pod="good"}'
+        values: '3+0x20'
+      - series: 'api_endpoint_health{microservice="airtel-aaa-user-provisioning-service", api="two_pod_endpoint", title="Two pods", method="GET", pod="bad"}'
+        values: '1+0x20'
+
+      # --- api_endpoint_health_reason: exactly one 1 per endpoint -----------
+      - series: 'api_endpoint_health_reason{microservice="airtel-aaa-user-provisioning-service", api="healthy_endpoint", reason="ok"}'
+        values: '1+0x20'
+      - series: 'api_endpoint_health_reason{microservice="airtel-aaa-user-provisioning-service", api="healthy_endpoint", reason="errors"}'
+        values: '0+0x20'
+      - series: 'api_endpoint_health_reason{microservice="airtel-aaa-user-provisioning-service", api="idle_endpoint", reason="idle"}'
+        values: '1+0x20'
+      - series: 'api_endpoint_health_reason{microservice="airtel-aaa-user-provisioning-service", api="idle_endpoint", reason="ok"}'
+        values: '0+0x20'
+      - series: 'api_endpoint_health_reason{microservice="airtel-aaa-user-provisioning-service", api="broken_endpoint", reason="errors"}'
+        values: '1+0x20'
+      - series: 'api_endpoint_health_reason{microservice="airtel-aaa-user-provisioning-service", api="broken_endpoint", reason="ok"}'
+        values: '0+0x20'
+      - series: 'api_endpoint_health_reason{microservice="airtel-aaa-user-provisioning-service", api="blocked_endpoint", reason="dependency_down"}'
+        values: '1+0x20'
+      - series: 'api_endpoint_health_reason{microservice="airtel-aaa-user-provisioning-service", api="missing_endpoint", reason="not_mapped"}'
+        values: '1+0x20'
+      - series: 'api_endpoint_health_reason{microservice="airtel-aaa-user-provisioning-service", api="flappy_endpoint", reason="errors"}'
+        values: '1+0x20'
+      - series: 'api_endpoint_health_reason{microservice="airtel-aaa-user-provisioning-service", api="two_pod_endpoint", reason="errors"}'
+        values: '1+0x20'
+
+      # --- api_endpoint_mapped ---------------------------------------------
+      - series: 'api_endpoint_mapped{microservice="airtel-aaa-user-provisioning-service", api="healthy_endpoint"}'
+        values: '1+0x20'
+      - series: 'api_endpoint_mapped{microservice="airtel-aaa-user-provisioning-service", api="idle_endpoint"}'
+        values: '1+0x20'
+      - series: 'api_endpoint_mapped{microservice="airtel-aaa-user-provisioning-service", api="broken_endpoint"}'
+        values: '1+0x20'
+      - series: 'api_endpoint_mapped{microservice="airtel-aaa-user-provisioning-service", api="blocked_endpoint"}'
+        values: '1+0x20'
+      - series: 'api_endpoint_mapped{microservice="airtel-aaa-user-provisioning-service", api="missing_endpoint"}'
+        values: '0+0x20'
+      - series: 'api_endpoint_mapped{microservice="airtel-aaa-user-provisioning-service", api="flappy_endpoint"}'
+        values: '1+0x20'
+
+      # --- api_endpoint_error_ratio -----------------------------------------
+      # 0 for the clean ones, 0.5 for the broken one, 0.02 for the flapping one.
+      - series: 'api_endpoint_error_ratio{microservice="airtel-aaa-user-provisioning-service", api="healthy_endpoint"}'
+        values: '0+0x20'
+      - series: 'api_endpoint_error_ratio{microservice="airtel-aaa-user-provisioning-service", api="idle_endpoint"}'
+        values: '0+0x20'
+      - series: 'api_endpoint_error_ratio{microservice="airtel-aaa-user-provisioning-service", api="broken_endpoint"}'
+        values: '0.5+0x20'
+      - series: 'api_endpoint_error_ratio{microservice="airtel-aaa-user-provisioning-service", api="flappy_endpoint"}'
+        values: '0.02+0x20'
+
+      # --- transitions: only flappy_endpoint is changing state ---------------
+      # One state change a minute for the whole hour.
+      - series: 'api_endpoint_health_transitions_total{microservice="airtel-aaa-user-provisioning-service", api="flappy_endpoint", to="degraded"}'
+        values: '0+1x20'
+      - series: 'api_endpoint_health_transitions_total{microservice="airtel-aaa-user-provisioning-service", api="flappy_endpoint", to="healthy"}'
+        values: '0+1x20'
+      - series: 'api_endpoint_health_transitions_total{microservice="airtel-aaa-user-provisioning-service", api="broken_endpoint", to="unhealthy"}'
+        values: '0+0x20'
+
+    promql_expr_test:
+      # --- recording rules --------------------------------------------------
+      - expr: api:health:min
+        eval_time: 15m
+        exp_samples:
+          - labels: 'api:health:min{api="blocked_endpoint"}'
+            value: 1
+          - labels: 'api:health:min{api="broken_endpoint"}'
+            value: 1
+          - labels: 'api:health:min{api="flappy_endpoint"}'
+            value: 2
+          - labels: 'api:health:min{api="healthy_endpoint"}'
+            value: 3
+          - labels: 'api:health:min{api="idle_endpoint"}'
+            value: 3
+          - labels: 'api:health:min{api="missing_endpoint"}'
+            value: 1
+          # the pod labels are aggregated away, and the worse pod wins
+          - labels: 'api:health:min{api="two_pod_endpoint"}'
+            value: 1
+
+      - expr: api:health_error_ratio:max
+        eval_time: 15m
+        exp_samples:
+          - labels: 'api:health_error_ratio:max{api="broken_endpoint"}'
+            value: 0.5
+          - labels: 'api:health_error_ratio:max{api="flappy_endpoint"}'
+            value: 0.02
+          - labels: 'api:health_error_ratio:max{api="healthy_endpoint"}'
+            value: 0
+          - labels: 'api:health_error_ratio:max{api="idle_endpoint"}'
+            value: 0
+
+      # The reason join: one series per unhealthy endpoint, carrying the reason.
+      - expr: (api:health_reason:max == 1) and on (api) (api:health:min == 1)
+        eval_time: 15m
+        exp_samples:
+          - labels: 'api:health_reason:max{api="blocked_endpoint", reason="dependency_down"}'
+            value: 1
+          - labels: 'api:health_reason:max{api="broken_endpoint", reason="errors"}'
+            value: 1
+          - labels: 'api:health_reason:max{api="missing_endpoint", reason="not_mapped"}'
+            value: 1
+          - labels: 'api:health_reason:max{api="two_pod_endpoint", reason="errors"}'
+            value: 1
+
+    alert_rule_test:
+      # Nothing fires in the first two minutes - every alert has a `for`.
+      - eval_time: 1m
+        alertname: UserProvisioningEndpointUnhealthy
+        exp_alerts: []
+
+      - eval_time: 15m
+        alertname: UserProvisioningEndpointUnhealthy
+        exp_alerts:
+          - exp_labels:
+              api: blocked_endpoint
+              reason: dependency_down
+              severity: critical
+              service: airtel-aaa-user-provisioning-service
+            exp_annotations:
+              summary: 'blocked_endpoint is unhealthy (dependency_down)'
+              description: >-
+                Endpoint blocked_endpoint has been unhealthy for 2 minutes, reason dependency_down.
+                dependency_down means something it cannot serve without is unreachable - check the
+                connectivity dashboard. not_mapped means this build does not serve the path in the
+                catalog at all, and every call to it is answering 404. errors means it is failing
+                above monitoring.api.health.unhealthy-error-ratio. GET /monitoring/endpoints on a pod
+                gives the full detail.
+          - exp_labels:
+              api: broken_endpoint
+              reason: errors
+              severity: critical
+              service: airtel-aaa-user-provisioning-service
+            exp_annotations:
+              summary: 'broken_endpoint is unhealthy (errors)'
+              description: >-
+                Endpoint broken_endpoint has been unhealthy for 2 minutes, reason errors.
+                dependency_down means something it cannot serve without is unreachable - check the
+                connectivity dashboard. not_mapped means this build does not serve the path in the
+                catalog at all, and every call to it is answering 404. errors means it is failing
+                above monitoring.api.health.unhealthy-error-ratio. GET /monitoring/endpoints on a pod
+                gives the full detail.
+          - exp_labels:
+              api: missing_endpoint
+              reason: not_mapped
+              severity: critical
+              service: airtel-aaa-user-provisioning-service
+            exp_annotations:
+              summary: 'missing_endpoint is unhealthy (not_mapped)'
+              description: >-
+                Endpoint missing_endpoint has been unhealthy for 2 minutes, reason not_mapped.
+                dependency_down means something it cannot serve without is unreachable - check the
+                connectivity dashboard. not_mapped means this build does not serve the path in the
+                catalog at all, and every call to it is answering 404. errors means it is failing
+                above monitoring.api.health.unhealthy-error-ratio. GET /monitoring/endpoints on a pod
+                gives the full detail.
+          - exp_labels:
+              api: two_pod_endpoint
+              reason: errors
+              severity: critical
+              service: airtel-aaa-user-provisioning-service
+            exp_annotations:
+              summary: 'two_pod_endpoint is unhealthy (errors)'
+              description: >-
+                Endpoint two_pod_endpoint has been unhealthy for 2 minutes, reason errors.
+                dependency_down means something it cannot serve without is unreachable - check the
+                connectivity dashboard. not_mapped means this build does not serve the path in the
+                catalog at all, and every call to it is answering 404. errors means it is failing
+                above monitoring.api.health.unhealthy-error-ratio. GET /monitoring/endpoints on a pod
+                gives the full detail.
+
+      # The degraded endpoint is the only one on the warning alert - an
+      # unhealthy endpoint must not also raise a warning about being degraded.
+      - eval_time: 15m
+        alertname: UserProvisioningEndpointDegraded
+        exp_alerts:
+          - exp_labels:
+              api: flappy_endpoint
+              reason: errors
+              severity: warning
+              service: airtel-aaa-user-provisioning-service
+            exp_annotations:
+              summary: 'flappy_endpoint is degraded (errors)'
+              description: >-
+                Endpoint flappy_endpoint has been degraded for 10 minutes. It is serving, but above
+                monitoring.api.health.degraded-error-ratio - or it saw a failure with too little
+                traffic for a ratio to mean anything. Held for 10 minutes because that is the
+                difference between a problem and a bad minute.
+
+      - eval_time: 15m
+        alertname: UserProvisioningEndpointNotMapped
+        exp_alerts:
+          - exp_labels:
+              api: missing_endpoint
+              severity: critical
+              service: airtel-aaa-user-provisioning-service
+            exp_annotations:
+              summary: 'missing_endpoint has no handler in the running build'
+              description: >-
+                The method and path catalogued for missing_endpoint are not mapped to any controller
+                in at least one running pod, so calls to it answer 404 while availability still reads
+                100%. Either monitoring.api.endpoints in application.yml or the controller's request
+                mapping is out of date - they were changed apart.
+
+      # Two transitions a minute for an hour is well past six an hour.
+      - eval_time: 15m
+        alertname: UserProvisioningEndpointFlapping
+        exp_alerts:
+          - exp_labels:
+              api: flappy_endpoint
+              severity: warning
+              service: airtel-aaa-user-provisioning-service
+            exp_annotations:
+              summary: 'flappy_endpoint health is flapping (30 changes in an hour)'
+              description: >-
+                flappy_endpoint has changed health state more than six times in an hour. Usually an
+                error ratio sitting on degraded-error-ratio, or a dependency that keeps recovering and
+                failing. Widen the thresholds in monitoring.api.health or fix the dependency - do not
+                silence this, an endpoint this unstable is not serving well.
+
+      # Nothing is in the unknown state, and the series is present, so neither
+      # of the "monitoring itself is broken" alerts fires.
+      - eval_time: 15m
+        alertname: UserProvisioningEndpointHealthUnknown
+        exp_alerts: []
+
+      - eval_time: 15m
+        alertname: UserProvisioningNoEndpointHealth
+        exp_alerts: []

@@ -300,24 +300,37 @@ monitoring:
         method: POST
         uris:
           - /api/user
+        dependencies:
+          - database
+          - kafka
 
       - name: update_user
         title: Update User
         method: PATCH
         uris:
           - /api/user/{user_name}
+        dependencies:
+          - database
+          - kafka
 
       - name: delete_user
         title: Delete user
         method: DELETE
         uris:
           - /api/user/{user_name}
+        dependencies:
+          - database
+          - kafka
 
       - name: activate_user
         title: Activate user
         method: POST
         uris:
           - /api/services/activate
+        dependencies:
+          - database
+          - kafka
+          - redis
 
       # updateService and deleteService are each mapped to two paths; both are
       # listed so either spelling lands on the same time series.
@@ -327,6 +340,10 @@ monitoring:
         uris:
           - /api/user/{user_id}/services/{plan_id}/{request_id}
           - /api/user/services/{user_id}/{plan_id}/{request_id}
+        dependencies:
+          - database
+          - kafka
+          - redis
 
       - name: delete_service
         title: Delete service
@@ -334,18 +351,26 @@ monitoring:
         uris:
           - /api/user/{user_id}/services/{plan_id}/{request_id}
           - /api/user/services/{user_id}/{plan_id}/{request_id}
+        dependencies:
+          - database
+          - kafka
+          - redis
 
       - name: get_user
         title: Get user
         method: GET
         uris:
           - /api/user/{user_name}
+        dependencies:
+          - database
 
       - name: get_users
         title: Get users
         method: GET
         uris:
           - /api/user
+        dependencies:
+          - database
 
       # The API sheet lists this as /api/v1/service-lines/{id}/status; the path
       # actually served by UserController#getServiceDetails is the one below.
@@ -354,6 +379,27 @@ monitoring:
         method: GET
         uris:
           - /api/user/service-lines/status/{serviceLineNumber}
+        dependencies:
+          - database
+
+    # -----------------------------------------------------------------------
+    # Per-endpoint health. Availability says what share of requests failed;
+    # health says whether the endpoint is fit to serve at all, which is the
+    # question an endpoint with no traffic cannot otherwise answer. Three
+    # checks decide it - the handler is mapped here, every dependency below is
+    # reachable, and the 5xx ratio is under the thresholds. Published as
+    # api_endpoint_health and served as JSON on GET /monitoring/endpoints.
+    # See monitoring/HEALTH.md.
+    # -----------------------------------------------------------------------
+    health:
+      enabled: true
+      evaluation-interval-ms: 15000   # how often the verdict is recomputed
+      window-ms: 300000               # how far back the error ratio looks (matches the [5m] rates)
+      degraded-error-ratio: 0.01      # 1% of requests failing -> DEGRADED
+      unhealthy-error-ratio: 0.10     # 10% -> UNHEALTHY
+      minimum-requests: 20            # below this, a failure reads DEGRADED rather than a ratio
+      use-dependency-state: true      # a required dependency being DOWN marks the endpoint UNHEALTHY
+      verify-mappings: true           # check at startup that every catalogued endpoint has a handler
 
 # ---------------------------------------------------------------------------
 # Dependency connectivity monitoring (Oracle / Redis / Kafka)

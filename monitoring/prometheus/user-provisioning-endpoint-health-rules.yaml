@@ -1,0 +1,181 @@
+# Prometheus / Thanos rules for per-endpoint REST health of
+# airtel-aaa-user-provisioning-service.
+#
+# Apply as a PrometheusRule on OpenShift:
+#     oc -n airtel-aaa apply -f user-provisioning-endpoint-health-rules.yaml
+#
+# On a plain Prometheus, copy the `spec:` block into a rule_files entry instead.
+#
+# These are the health rules. Availability - the share of requests that did not
+# answer 5xx - is a different question with its own file,
+# user-provisioning-endpoint-rules.yaml. The two are complementary and neither
+# replaces the other: availability can only speak about endpoints that were
+# called, and reads a serene 100% for one that was not; health is evaluated in
+# the application every 15s from checks that do not need traffic, so a quiet
+# endpoint whose database has gone still goes red here.
+#
+# Every rule is scoped by the `microservice` label ApiMonitoringConfig adds to
+# all meters, so they stay put on a Prometheus shared with the rest of the AAA
+# stack.
+#
+# All of these aggregate with min/max across pods on purpose: one bad pod is an
+# outage for whatever share of traffic lands on it, so the worst pod is the
+# state that gets reported.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: airtel-aaa-user-provisioning-endpoint-health
+  namespace: airtel-aaa
+  labels:
+    app: airtel-aaa-user-provisioning-service
+    role: alert-rules
+spec:
+  groups:
+    - name: user-provisioning-endpoint-health-recording
+      interval: 30s
+      rules:
+        # The state of the worst pod serving each endpoint:
+        # 3 healthy, 2 degraded, 1 unhealthy, 0 unknown.
+        - record: api:health:min
+          expr: |
+            min by (api) (
+              api_endpoint_health{microservice="airtel-aaa-user-provisioning-service"}
+            )
+
+        # The reason behind that state, as a 1 on one (api, reason) pair per
+        # endpoint. Kept as a recording rule so the alerts below can join on it
+        # and carry the reason in their labels rather than in prose.
+        - record: api:health_reason:max
+          expr: |
+            max by (api, reason) (
+              api_endpoint_health_reason{microservice="airtel-aaa-user-provisioning-service"}
+            )
+
+        # 5xx share over the health window, per endpoint, from the worst pod.
+        - record: api:health_error_ratio:max
+          expr: |
+            max by (api) (
+              api_endpoint_error_ratio{microservice="airtel-aaa-user-provisioning-service"}
+            )
+
+    - name: user-provisioning-endpoint-health-alerts
+      interval: 30s
+      rules:
+        - alert: UserProvisioningEndpointUnhealthy
+          # The reason series is what fires, filtered down to the endpoints that
+          # are actually unhealthy. Alerting on the reason rather than on the
+          # state is what puts `reason` in the alert's labels, so the routing and
+          # the page itself say whether this is a dependency outage, a missing
+          # handler or the endpoint failing under its own steam. Exactly one
+          # reason is 1 per endpoint, so this cannot double-fire.
+          expr: |
+            (api:health_reason:max == 1) and on (api) (api:health:min == 1)
+          for: 2m
+          labels:
+            severity: critical
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: '{{ $labels.api }} is unhealthy ({{ $labels.reason }})'
+            description: >-
+              Endpoint {{ $labels.api }} has been unhealthy for 2 minutes, reason
+              {{ $labels.reason }}. dependency_down means something it cannot serve without is
+              unreachable - check the connectivity dashboard. not_mapped means this build does
+              not serve the path in the catalog at all, and every call to it is answering 404.
+              errors means it is failing above monitoring.api.health.unhealthy-error-ratio.
+              GET /monitoring/endpoints on a pod gives the full detail.
+
+        - alert: UserProvisioningEndpointDegraded
+          expr: |
+            (api:health_reason:max == 1) and on (api) (api:health:min == 2)
+          for: 10m
+          labels:
+            severity: warning
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: '{{ $labels.api }} is degraded ({{ $labels.reason }})'
+            description: >-
+              Endpoint {{ $labels.api }} has been degraded for 10 minutes. It is serving, but
+              above monitoring.api.health.degraded-error-ratio - or it saw a failure with too
+              little traffic for a ratio to mean anything. Held for 10 minutes because that is
+              the difference between a problem and a bad minute.
+
+        - alert: UserProvisioningEndpointNotMapped
+          # This one is deliberately separate from the unhealthy alert, and
+          # fires faster. It is not a runtime failure - it is a build that does
+          # not serve an endpoint it is supposed to - and no amount of waiting
+          # will resolve it. It is also invisible everywhere else: the calls it
+          # breaks answer 404, and 404 never dents an availability figure.
+          expr: |
+            min by (api) (
+              api_endpoint_mapped{microservice="airtel-aaa-user-provisioning-service"}
+            ) == 0
+          for: 5m
+          labels:
+            severity: critical
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: '{{ $labels.api }} has no handler in the running build'
+            description: >-
+              The method and path catalogued for {{ $labels.api }} are not mapped to any
+              controller in at least one running pod, so calls to it answer 404 while
+              availability still reads 100%. Either monitoring.api.endpoints in application.yml
+              or the controller's request mapping is out of date - they were changed apart.
+
+        - alert: UserProvisioningEndpointHealthUnknown
+          # Health never went to a verdict. Either the evaluation schedule is not
+          # running or it is throwing every cycle; either way the rest of these
+          # alerts are blind, so this says so rather than letting silence read as
+          # health.
+          expr: |
+            api:health:min == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: '{{ $labels.api }} has no health verdict'
+            description: >-
+              {{ $labels.api }} has reported health 0 (unknown) for 10 minutes, far longer than
+              the one evaluation interval it should take after a restart. The evaluation
+              schedule in EndpointHealthMonitor is probably not running - check the pod log for
+              "Endpoint health evaluation failed".
+
+        - alert: UserProvisioningEndpointFlapping
+          # A threshold that a real workload sits exactly on produces an endpoint
+          # that alerts, recovers, and alerts again - each cycle too short to be
+          # acted on and too frequent to ignore. That is a tuning problem, and it
+          # needs saying as one rather than as six pages.
+          expr: |
+            sum by (api) (
+              increase(
+                api_endpoint_health_transitions_total{microservice="airtel-aaa-user-provisioning-service"}[1h]
+              )
+            ) > 6
+          for: 10m
+          labels:
+            severity: warning
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: '{{ $labels.api }} health is flapping ({{ $value | printf "%.0f" }} changes in an hour)'
+            description: >-
+              {{ $labels.api }} has changed health state more than six times in an hour. Usually an
+              error ratio sitting on degraded-error-ratio, or a dependency that keeps recovering
+              and failing. Widen the thresholds in monitoring.api.health or fix the dependency -
+              do not silence this, an endpoint this unstable is not serving well.
+
+        - alert: UserProvisioningNoEndpointHealth
+          # The counterpart of UserProvisioningNoMetrics for this file. While it
+          # fires nothing else here can, because every rule above needs the
+          # series that is missing.
+          expr: |
+            absent(api_endpoint_health{microservice="airtel-aaa-user-provisioning-service"})
+          for: 5m
+          labels:
+            severity: critical
+            service: airtel-aaa-user-provisioning-service
+          annotations:
+            summary: No endpoint health metrics from the user provisioning service
+            description: >-
+              Nothing is publishing api_endpoint_health. Either every pod is down, the scrape is
+              broken, or monitoring.api.health.enabled was turned off. No other endpoint health
+              alert can fire while this is firing.
