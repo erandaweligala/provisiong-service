@@ -3,25 +3,35 @@
 Monitoring for `airtel-aaa-user-provisioning-service`, from the service's own
 Micrometer metrics through Prometheus into Grafana.
 
-Two questions are monitored, each with its own document, dashboard and alerts:
+Three questions are monitored, each with its own document and dashboard:
 
 | Document | Question it answers |
 | --- | --- |
+| [API-METRICS.md](API-METRICS.md) | How many calls each API served, how many failed, and how long they took. |
 | [HEALTH.md](HEALTH.md) | Whether each REST endpoint is fit to serve - including the ones nobody called. |
 | [CONNECTIVITY.md](CONNECTIVITY.md) | Whether Oracle, Redis and Kafka are reachable at all. |
 
-Read them together: health says whether an endpoint can take the next request,
-connectivity says whether the infrastructure underneath it is up. When an
-endpoint reports `dependency_down`, the second document is where the cause is.
+Read them in that order when something is wrong. The API metrics say what the
+callers saw - the failure count went up, or the responses got slower. Health
+says whether the endpoint behind it is fit to take the next request at all,
+which is the question traffic alone cannot answer for an API nobody called.
+Connectivity says whether the infrastructure underneath is up: when an endpoint
+reports `dependency_down`, that is where the cause is.
 
-This file covers what the two have in common - the endpoint catalog that health
-is driven by, and the scrape that carries both.
+Health and connectivity ship alerts; the API metrics are a dashboard only, since
+a threshold on a request count or a response time would have to be set per API.
+
+This file covers what the three have in common - the endpoint catalog they group
+by, and the scrape that carries all of them.
 
 ## What is in here
 
 | File | Purpose |
 | --- | --- |
 | `prometheus/servicemonitor.yaml` | Makes the Prometheus Operator scrape the pods. Shared by everything below. |
+| `API-METRICS.md` | Success count, failure count and average response time per API - the doc for the two files below. |
+| `grafana/user-provisioning-api-metrics.json` | The API metrics dashboard. Import into Grafana. |
+| `prometheus/user-provisioning-api-metrics-queries_test.yaml` | `promtool` unit test for that dashboard's queries. No rules to deploy. |
 | `HEALTH.md` | Per-endpoint health monitoring - the doc for the three files below. |
 | `grafana/user-provisioning-endpoint-health.json` | The health dashboard. Import into Grafana. |
 | `prometheus/user-provisioning-endpoint-health-rules.yaml` | Health alerts (unhealthy, degraded, not mapped, flapping). |
@@ -38,7 +48,7 @@ startup and turns it into two things:
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `api_endpoint_info` | gauge | `api`, `method`, `title`, `microservice` | Constant 1, one per catalogued endpoint. This is the catalog itself: it exists from startup, before any traffic. |
-| `http_server_requests_seconds_*` | timer | `api`, `method`, `uri`, `status`, `outcome`, `microservice` | Spring Boot's own request timer, with the `api` tag added. Health's 5xx check reads it. |
+| `http_server_requests_seconds_*` | timer | `api`, `method`, `uri`, `status`, `outcome`, `microservice` | Spring Boot's own request timer, with the `api` tag added. [API-METRICS.md](API-METRICS.md) reads the counts and the response time off it; health's 5xx check reads the same series. |
 
 The `api` label comes from `monitoring.api.endpoints[].name`. Traffic to a path
 that is not in the catalog is tagged `api="other"`, so the label can never blow
@@ -53,9 +63,9 @@ same catalog - see [HEALTH.md](HEALTH.md#metrics-published).
 
 ## Scraping
 
-Both dashboards read the same `/actuator/prometheus` endpoint, so there is one
-scrape to set up. Check the label your Service actually carries, then apply the
-ServiceMonitor:
+All three dashboards read the same `/actuator/prometheus` endpoint, so there is
+one scrape to set up. Check the label your Service actually carries, then apply
+the ServiceMonitor:
 
 ```sh
 oc -n airtel-aaa get svc --show-labels
@@ -75,8 +85,9 @@ curl -s localhost:8089/actuator/prometheus | grep api_endpoint_info
 Nine lines should come back, one per endpoint in the catalog. If it is empty,
 nothing downstream will work - check `monitoring.api.enabled` first.
 
-From here, [HEALTH.md](HEALTH.md#setting-it-up) and
-[CONNECTIVITY.md](CONNECTIVITY.md) each cover their own alerts and dashboard.
+From here, [API-METRICS.md](API-METRICS.md#setting-it-up),
+[HEALTH.md](HEALTH.md#setting-it-up) and [CONNECTIVITY.md](CONNECTIVITY.md) each
+cover their own dashboard, and the last two their alerts.
 
 ## Changing the catalog
 
@@ -103,13 +114,14 @@ several paths lists all of them, and they all report as one endpoint.
 stops matching a real request mapping, so a silent drift cannot reach
 production.
 
-No dashboard change is needed: the panels are driven by the `api` label and the
-endpoint variable is populated from the catalog.
+No dashboard change is needed, on any of the three: the panels are driven by the
+`api` label and the endpoint variable is populated from the catalog.
 
 ## Turning it off
 
 `monitoring.api.enabled: false` drops the `api` tag, the `microservice` common
-tag and `api_endpoint_info` - and takes per-endpoint health with it, since health
-reads the same catalog. To turn off health alone, use
-`monitoring.api.health.enabled: false`. `http_server_requests` keeps working with
-its stock Spring Boot tags either way.
+tag and `api_endpoint_info` - and takes per-endpoint health and the API metrics
+dashboard with it, since both read the same catalog. To turn off health alone,
+use `monitoring.api.health.enabled: false`. `http_server_requests` keeps working
+with its stock Spring Boot tags either way, so response times and status counts
+are still queryable in Prometheus - just not per API.

@@ -257,8 +257,11 @@ management:
       # percentile per endpoint can be read off the histogram. These are plain
       # histogram buckets, not per-endpoint budgets: nothing alerts on them and no
       # endpoint has a target of its own. No dashboard or rule in monitoring/
-      # reads them today - they are here for ad hoc queries in Prometheus. Keep
-      # the list short: every bucket is another time series per endpoint.
+      # reads them today - the API metrics dashboard takes its average response
+      # time from the timer's own _sum and _count, which is exact and needs no
+      # buckets, so these are here for the percentile that average cannot show
+      # (see monitoring/API-METRICS.md). Keep the list short: every bucket is
+      # another time series per endpoint.
       slo:
         "[http.server.requests]": 25ms,50ms,100ms,200ms,300ms,500ms,750ms,1s,2s,3s,5s,10s
 
