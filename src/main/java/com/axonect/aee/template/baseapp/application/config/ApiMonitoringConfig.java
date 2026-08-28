@@ -43,14 +43,16 @@ import org.springframework.http.server.observation.ServerRequestObservationConve
  *
  * <p>A ratio of requests alone cannot say whether a quiet endpoint is well - no
  * requests is not a health check - so {@link EndpointHealthConfig} is imported
- * here to add one. It is imported rather than scanned so that it comes up only
- * with this class, and after the catalog it reads.</p>
+ * here to add one, and {@link ResponseTimeMonitoringConfig} beside it for the
+ * response time of the individual requests the timer can only aggregate. Both are
+ * imported rather than scanned so that they come up only with this class, and
+ * after the catalog they read.</p>
  */
 @Slf4j
 @Configuration
 @EnableConfigurationProperties(ApiMonitoringProperties.class)
 @ConditionalOnProperty(prefix = "monitoring.api", name = "enabled", havingValue = "true", matchIfMissing = true)
-@Import(EndpointHealthConfig.class)
+@Import({EndpointHealthConfig.class, ResponseTimeMonitoringConfig.class})
 public class ApiMonitoringConfig {
 
     private static final String INFO_GAUGE = "api.endpoint.info";

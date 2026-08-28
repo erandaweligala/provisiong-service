@@ -15,12 +15,13 @@ Three numbers per API, and nothing in the service had to be written to produce
 them - Spring Boot already times every request, and the endpoint catalog already
 labels it with which API served it.
 
-This is one of the three monitoring documents here, and the one that answers
+This is one of the four monitoring documents here, and the one that answers
 "how is this API doing?":
 
 | Document | Question it answers |
 | --- | --- |
-| **API-METRICS.md** (this file) | How many calls each API served, how many failed, and how long they took. |
+| **API-METRICS.md** (this file) | How many calls each API served, how many failed, and how long they took on average. |
+| [RESPONSE-TIME.md](RESPONSE-TIME.md) | How long each individual request took - percentiles, the distribution, and the slow ones by name. |
 | [HEALTH.md](HEALTH.md) | Whether each endpoint is fit to serve - including the ones nobody called. |
 | [CONNECTIVITY.md](CONNECTIVITY.md) | Whether Oracle, Redis and Kafka are reachable at all. |
 
@@ -64,11 +65,11 @@ request count, not an estimate off a histogram. It moves when the whole API
 slows down, which is the question "how fast is this API" usually means.
 
 What it will not show you is a slow tail. A handful of very slow calls barely
-move an average computed over thousands of fast ones. The histogram buckets for
-that are already published - `management.metrics.distribution.slo` in
-`application.yml` configures them - so `histogram_quantile()` over
-`http_server_requests_seconds_bucket` gives a p95 or p99 in Prometheus whenever
-one is wanted. No panel here reads them.
+move an average computed over thousands of fast ones. That is what
+[RESPONSE-TIME.md](RESPONSE-TIME.md) is for: the same timer's histogram buckets,
+read as p50, p95 and p99 per API, on a dashboard of their own. No panel here
+reads them - when the average on this page looks fine and somebody is still
+calling the service slow, that is the page to open.
 
 ### Counts are over the dashboard's time range
 

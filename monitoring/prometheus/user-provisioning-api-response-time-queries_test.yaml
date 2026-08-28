@@ -1,0 +1,355 @@
+# promtool unit test for the queries behind
+# grafana/user-provisioning-api-response-time.json.
+#
+# Like the API metrics dashboard, this one ships no recording rules - every panel
+# reads http_server_requests, api_slow_requests_total and api_endpoint_info
+# directly, so importing the JSON is the whole install and the arithmetic would
+# otherwise go untested. This file asserts the panel expressions themselves
+# against a fixture, using promql_expr_test and no rule_files at all.
+#
+# The dashboard's expressions carry Grafana variables, which are not PromQL, so
+# the expressions below are the panel expressions with five substitutions:
+#
+#   $microservice     -> airtel-aaa-user-provisioning-service
+#   $api              -> create_user|get_user|delete_user   (what "All" expands to)
+#   $threshold        -> 1.0                                (the "Slow at" picker)
+#   $__range          -> 30m                                (the dashboard time range)
+#   $__rate_interval  -> 5m                                 (one step of a chart)
+#
+# Nothing else is changed. Keep them in step when a panel query changes.
+#
+#   promtool test rules user-provisioning-api-response-time-queries_test.yaml
+#
+# The fixture is three catalogued APIs, each standing for one case the panels have
+# to get right:
+#
+#   create_user   300 requests, spread across the buckets up to 2s, 30 over 1s
+#   get_user      120 requests, all of them under 50ms
+#   delete_user   catalogued, never called - no bucket series at all
+#
+# The bucket values are the ones the service actually publishes: Micrometer turns
+# `management.metrics.distribution.slo` into cumulative buckets labelled with the
+# boundary in seconds, Go-formatted, so a 1 second boundary is `le="1.0"` and not
+# `le="1"`. The dashboard's threshold picker offers exactly those strings, which
+# is why it is a fixed list rather than free text.
+#
+# create_user's 300 requests over the 30 minute range land like this:
+#
+#   le      cumulative   in this bucket
+#   0.1        120           120
+#   0.2        180            60
+#   0.3        240            60
+#   0.5        270            30
+#   0.75       270             0
+#   1.0        270             0
+#   2.0        300            30
+#   +Inf       300             0
+#
+# which puts p50 in the 0.1-0.2 bucket and p95 and p99 in the 1.0-2.0 one. The
+# expected values below are the interpolation Prometheus does inside those
+# buckets, not round numbers chosen for the test - a percentile off a histogram
+# is only ever as precise as the bucket it falls in, and this is what that costs.
+#
+# The counts are exact rather than approximate because increase() extrapolates to
+# the edges of its window: with samples every minute and a 30m window, the first
+# sample sits one interval inside the boundary, which is within the 1.1x sample
+# interval Prometheus will extrapolate across, so a counter climbing 10/min over
+# the window comes back as exactly 300.
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      # --- the catalog: one constant 1 per API, traffic or not --------------
+      - series: 'api_endpoint_info{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", title="Create user"}'
+        values: '1+0x30'
+      - series: 'api_endpoint_info{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", title="Get user"}'
+        values: '1+0x30'
+      - series: 'api_endpoint_info{microservice="airtel-aaa-user-provisioning-service", api="delete_user", method="DELETE", title="Delete user"}'
+        values: '1+0x30'
+
+      # --- create_user: 10 requests a minute, four of them under 100ms ------
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", le="0.025"}'
+        values: '0+0x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", le="0.05"}'
+        values: '0+0x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", le="0.1"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", le="0.2"}'
+        values: '0+6x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", le="0.3"}'
+        values: '0+8x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", le="0.5"}'
+        values: '0+9x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", le="0.75"}'
+        values: '0+9x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", le="1.0"}'
+        values: '0+9x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", le="2.0"}'
+        values: '0+10x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", le="3.0"}'
+        values: '0+10x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", le="5.0"}'
+        values: '0+10x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", le="10.0"}'
+        values: '0+10x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", le="+Inf"}'
+        values: '0+10x30'
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS"}'
+        values: '0+10x30'
+      - series: 'http_server_requests_seconds_sum{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS"}'
+        values: '0+3x30'
+      # The timer's own max: one actual request took 1.8s. Micrometer decays it
+      # over a rolling window, which is why the panel reads it with max_over_time.
+      - series: 'http_server_requests_seconds_max{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS"}'
+        values: '1.8+0x30'
+
+      # --- get_user: 4 a minute, none of them slower than 50ms --------------
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", le="0.025"}'
+        values: '0+2x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", le="0.05"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", le="0.1"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", le="0.2"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", le="0.3"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", le="0.5"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", le="0.75"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", le="1.0"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", le="2.0"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", le="3.0"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", le="5.0"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", le="10.0"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_bucket{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", le="+Inf"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_sum{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS"}'
+        values: '0+0.1x30'
+      - series: 'http_server_requests_seconds_max{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS"}'
+        values: '0.04+0x30'
+
+      # --- delete_user: catalogued above, no request series at all ----------
+
+      # --- the individual slow requests the service recorded itself ---------
+      - series: 'api_slow_requests_total{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", status="200", severity="slow"}'
+        values: '0+2x30'
+      - series: 'api_slow_requests_total{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", status="500", severity="very_slow"}'
+        values: '0+1x30'
+      - series: 'api_request_duration_last_seconds{microservice="airtel-aaa-user-provisioning-service", api="create_user"}'
+        values: '0.42+0x30'
+
+    promql_expr_test:
+      # =====================================================================
+      # Totals - the stat row across the top
+      # =====================================================================
+
+      # p50 over the range. 420 requests across both APIs, so the median is
+      # request 210, and the aggregated histogram holds 120 requests at 0.05 and
+      # 240 at 0.1 - get_user's 120 fast ones are what pull the service median
+      # down into that bucket. 90 requests into a bucket of 120, three quarters
+      # of the way from 0.05 to 0.1.
+      - expr: 'histogram_quantile(0.50, sum by (le) (increase(http_server_requests_seconds_bucket{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{}'
+            value: 0.08750000000000001
+
+      # p95: request 399 of 420. 390 requests came in under a second, and the
+      # 30 that did not are create_user's - so the answer sits 9 requests into
+      # that bucket of 30, not far above 1s.
+      - expr: 'histogram_quantile(0.95, sum by (le) (increase(http_server_requests_seconds_bucket{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{}'
+            value: 1.3
+
+      # The slowest single request any API served, off the timer's own max
+      # rather than off a bucket - 1.8s, exactly as it was measured.
+      - expr: 'max(max_over_time(http_server_requests_seconds_max{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{}'
+            value: 1.8
+
+      # Requests slower than the threshold: everything the 1.0 bucket did not
+      # catch. 420 requests, 390 of them under a second.
+      - expr: 'sum(increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])) - sum(increase(http_server_requests_seconds_bucket{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", le="1.0"}[30m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{}'
+            value: 30
+
+      # The same 30 requests as a share of all of them.
+      - expr: '1 - (sum(increase(http_server_requests_seconds_bucket{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", le="1.0"}[30m])) / sum(increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{}'
+            value: 0.07142857142857140
+
+      # =====================================================================
+      # Per API - the table columns and the bar gauge
+      # =====================================================================
+
+      # p50. create_user's median request sits halfway through its 0.1-0.2
+      # bucket; get_user's sits at the top of its first one, because the
+      # bucket below the median is the first bucket there is.
+      - expr: 'histogram_quantile(0.50, sum by (api, le) (increase(http_server_requests_seconds_bucket{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 0.15000000000000002
+          - labels: '{api="get_user"}'
+            value: 0.025
+
+      # p95. 285 of create_user's 300 requests, which is 15 requests into the
+      # 30 that fell between 1s and 2s.
+      - expr: 'histogram_quantile(0.95, sum by (api, le) (increase(http_server_requests_seconds_bucket{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 1.5
+          - labels: '{api="get_user"}'
+            value: 0.0475
+
+      # p99, 27 requests into the same bucket.
+      - expr: 'histogram_quantile(0.99, sum by (api, le) (increase(http_server_requests_seconds_bucket{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 1.9
+          - labels: '{api="get_user"}'
+            value: 0.0495
+
+      # An API nobody called has no bucket series, so every percentile column is
+      # blank for it rather than 0 - a 0 would read as "answers instantly".
+      # delete_user is deliberately absent from all three lists above.
+
+      # Slowest, per API: the actual duration of one actual request.
+      - expr: 'max by (api) (max_over_time(http_server_requests_seconds_max{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 1.8
+          - labels: '{api="get_user"}'
+            value: 0.04
+
+      # Avg, off the timer's own sum and count: 90s over 300 requests. get_user's
+      # 3s over 120 is 0.025 with the float noise increase() leaves behind when
+      # it extrapolates both sides of the division to the window edges.
+      - expr: 'sum by (api) (increase(http_server_requests_seconds_sum{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])) / sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 0.3
+          - labels: '{api="get_user"}'
+            value: 0.025000000000000012
+
+      # The average is 0.3s and the p95 is 1.5s for the same API: the whole
+      # reason this dashboard exists beside the API metrics one.
+
+      # Requests over the threshold, per API. get_user reads 0 rather than
+      # blank - it took traffic, and none of it was slow.
+      - expr: 'sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])) - sum by (api) (increase(http_server_requests_seconds_bucket{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", le="1.0"}[30m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 30
+          - labels: '{api="get_user"}'
+            value: 0
+
+      # Requests, the one column that does fall back to 0 for an API with no
+      # traffic - it is a count, and none is a real answer to "how many".
+      - expr: 'sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])) or sum by (api) (0 * api_endpoint_info{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"})'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 300
+          - labels: '{api="get_user"}'
+            value: 120
+          - labels: '{api="delete_user"}'
+            value: 0
+
+      # The bar gauge carries the catalog title through group_left, so it reads
+      # as the dashboard's API names rather than as metric tags.
+      - expr: 'histogram_quantile(0.95, sum by (api, le) (increase(http_server_requests_seconds_bucket{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m]))) * on (api) group_left(title) max by (api, title) (api_endpoint_info{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"})'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user", title="Create user"}'
+            value: 1.5
+          - labels: '{api="get_user", title="Get user"}'
+            value: 0.0475
+
+      # =====================================================================
+      # Over time - one step of a chart rather than the whole range
+      # =====================================================================
+
+      # The same p95 per API, off a rate rather than a range increase. The
+      # bucket shares are what a percentile reads, not the absolute counts, so
+      # the answer is the same 1.5s the table shows.
+      - expr: 'histogram_quantile(0.95, sum by (api, le) (rate(http_server_requests_seconds_bucket{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[5m])))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 1.5
+          - labels: '{api="get_user"}'
+            value: 0.0475
+
+      # The heatmap's own query, per bucket rather than per API: one column of
+      # the heatmap, 5 minutes wide.
+      - expr: 'sum by (le) (increase(http_server_requests_seconds_bucket{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", le="0.1"}[5m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{le="0.1"}'
+            value: 40
+
+      # Requests over the threshold in one step of the chart.
+      - expr: 'sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[5m])) - sum by (api) (increase(http_server_requests_seconds_bucket{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", le="1.0"}[5m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 5
+          - labels: '{api="get_user"}'
+            value: 0
+
+      # =====================================================================
+      # Individual requests - what the service recorded itself
+      # =====================================================================
+
+      # The slow requests the recorder counted, split by severity. These are
+      # individual requests, each one of them also a WARN line in the log.
+      - expr: 'sum by (api, severity) (increase(api_slow_requests_total{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user", severity="slow"}'
+            value: 60
+          - labels: '{api="create_user", severity="very_slow"}'
+            value: 30
+
+      # The table beside it keeps the status, because a slow 500 and a slow 200
+      # are different problems.
+      - expr: 'sum by (api, method, status, severity) (increase(api_slow_requests_total{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user", method="POST", status="200", severity="slow"}'
+            value: 60
+          - labels: '{api="create_user", method="POST", status="500", severity="very_slow"}'
+            value: 30
+
+      # The last request each API served before the scrape. A gauge, read as it
+      # is - no rate, no window, one request.
+      - expr: 'api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}'
+        eval_time: 30m
+        exp_samples:
+          - labels: 'api_request_duration_last_seconds{microservice="airtel-aaa-user-provisioning-service", api="create_user"}'
+            value: 0.42
