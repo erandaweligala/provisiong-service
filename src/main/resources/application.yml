@@ -263,12 +263,18 @@ management:
       # Publishes http_server_requests_seconds_bucket, so a response time
       # percentile per endpoint can be read off the histogram. These are plain
       # histogram buckets, not per-endpoint budgets: nothing alerts on them and no
-      # endpoint has a target of its own. No dashboard or rule in monitoring/
-      # reads them today - the API metrics dashboard takes its average response
-      # time from the timer's own _sum and _count, which is exact and needs no
-      # buckets, so these are here for the percentile that average cannot show
-      # (see monitoring/API-METRICS.md). Keep the list short: every bucket is
-      # another time series per endpoint.
+      # endpoint has a target of its own.
+      #
+      # The response time dashboard reads them - every percentile, the heatmap and
+      # the "slower than" counts on it are these buckets, which is also why the
+      # threshold picker on it offers exactly these values and nothing between
+      # them (see monitoring/RESPONSE-TIME.md). The API metrics dashboard does not:
+      # its average comes from the timer's own _sum and _count, which is exact and
+      # needs no buckets.
+      #
+      # Keep the list short: every bucket is another time series per endpoint, and
+      # every panel that reads a quantile is only as precise as the two buckets it
+      # falls between.
       slo:
         "[http.server.requests]": 25ms,50ms,100ms,200ms,300ms,500ms,750ms,1s,2s,3s,5s,10s
 
@@ -385,6 +391,21 @@ monitoring:
           - /api/user/service-lines/status/{serviceLineNumber}
         dependencies:
           - database
+
+    # -----------------------------------------------------------------------
+    # Per-request response time. The distribution - percentiles, the heatmap,
+    # the slowest request in the window - comes off the histogram buckets
+    # above and needs nothing here. These settings govern the individual
+    # request: which ones are named in the log with their exact duration, and
+    # which ones are counted in api_slow_requests_total.
+    # See monitoring/RESPONSE-TIME.md.
+    # -----------------------------------------------------------------------
+    response-time:
+      enabled: true
+      slow-request-threshold-ms: 1000       # at or over this, one WARN line per request
+      very-slow-request-threshold-ms: 3000  # at or over this, severity="very_slow"
+      log-every-request: false              # true logs every request's duration, not just the slow ones
+      include-uncatalogued: false           # ignore traffic outside the catalog, actuator included
 
     # -----------------------------------------------------------------------
     # Per-endpoint health. A ratio of requests says what share of them failed;
