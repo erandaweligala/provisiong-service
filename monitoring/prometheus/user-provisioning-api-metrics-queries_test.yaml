@@ -1,0 +1,271 @@
+# promtool unit test for the queries behind
+# grafana/user-provisioning-api-metrics.json.
+#
+# The dashboard ships no recording rules - every panel reads http_server_requests
+# and api_endpoint_info directly, so importing the JSON is the whole install.
+# That leaves the arithmetic untested, which is what this file is for: it asserts
+# the panel expressions themselves against a fixture, using promql_expr_test and
+# no rule_files at all.
+#
+# The dashboard's expressions carry Grafana variables, which are not PromQL, so
+# the expressions below are the panel expressions with four substitutions:
+#
+#   $microservice     -> airtel-aaa-user-provisioning-service
+#   $api              -> create_user|get_user|delete_user   (what "All" expands to)
+#   $__range          -> 30m                                (the dashboard time range)
+#   $__rate_interval  -> 5m                                 (one step of a chart)
+#
+# Nothing else is changed. Keep them in step when a panel query changes.
+#
+#   promtool test rules user-provisioning-api-metrics-queries_test.yaml
+#
+# The fixture is three catalogued APIs plus untracked traffic, each standing for
+# one case the panels have to get right:
+#
+#   create_user   240 served, 30 rejected 400, 30 failed 500  -> counts split, 20% failed
+#   get_user      120 served, nothing failed                  -> Failed reads 0, not blank
+#   delete_user   catalogued, never called                    -> 0 / 0, no response time
+#   other         traffic to a path outside the catalog       -> counted only by Uncatalogued
+#
+# delete_user is the case worth being explicit about. An API nobody called has no
+# http_server_requests series at all, so a plain sum() returns nothing for it and
+# the row would vanish from the table. The `or sum by (api) (0 * api_endpoint_info)`
+# tail is what turns that absence into a 0. It is deliberately not applied to the
+# response time columns: no requests means no response time, and a 0 there would
+# read as instant rather than as untested.
+#
+# The counts are exact rather than approximate because increase() extrapolates to
+# the edges of its window: with samples every minute and a 30m window, the first
+# sample sits one interval inside the boundary, which is within the 1.1x sample
+# interval Prometheus will extrapolate across, so a counter climbing 8/min over
+# the window comes back as exactly 240.
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      # --- the catalog: one constant 1 per API, traffic or not --------------
+      - series: 'api_endpoint_info{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", title="Create user"}'
+        values: '1+0x30'
+      - series: 'api_endpoint_info{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", title="Get user"}'
+        values: '1+0x30'
+      - series: 'api_endpoint_info{microservice="airtel-aaa-user-provisioning-service", api="delete_user", method="DELETE", title="Delete user"}'
+        values: '1+0x30'
+
+      # --- create_user: 8 served, 1 rejected and 1 broken per minute --------
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", exception="none"}'
+        values: '0+8x30'
+      - series: 'http_server_requests_seconds_sum{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="200", outcome="SUCCESS", exception="none"}'
+        values: '0+2x30'
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="400", outcome="CLIENT_ERROR", exception="none"}'
+        values: '0+1x30'
+      - series: 'http_server_requests_seconds_sum{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="400", outcome="CLIENT_ERROR", exception="none"}'
+        values: '0+0.5x30'
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="500", outcome="SERVER_ERROR", exception="IllegalStateException"}'
+        values: '0+1x30'
+      - series: 'http_server_requests_seconds_sum{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", uri="/api/user", status="500", outcome="SERVER_ERROR", exception="IllegalStateException"}'
+        values: '0+0.5x30'
+
+      # --- get_user: 4 a minute, all of them served -------------------------
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", exception="none"}'
+        values: '0+4x30'
+      - series: 'http_server_requests_seconds_sum{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS", exception="none"}'
+        values: '0+0.5x30'
+
+      # --- delete_user: catalogued above, no request series at all ----------
+
+      # --- traffic to a path that is not in the catalog ---------------------
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="other", method="GET", uri="/actuator/health", status="200", outcome="SUCCESS", exception="none"}'
+        values: '0+1x30'
+      - series: 'http_server_requests_seconds_sum{microservice="airtel-aaa-user-provisioning-service", api="other", method="GET", uri="/actuator/health", status="200", outcome="SUCCESS", exception="none"}'
+        values: '0+0.1x30'
+
+    promql_expr_test:
+      # =====================================================================
+      # Per API: Success, Failed, Avg response time - the three table columns
+      # =====================================================================
+
+      # Success: everything that answered below 400. delete_user reads 0
+      # through the api_endpoint_info tail rather than dropping out.
+      - expr: 'sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", outcome!~"CLIENT_ERROR|SERVER_ERROR"}[30m])) or sum by (api) (0 * api_endpoint_info{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"})'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 240
+          - labels: '{api="get_user"}'
+            value: 120
+          - labels: '{api="delete_user"}'
+            value: 0
+
+      # Failed: 4xx and 5xx together. get_user reads 0 rather than blank -
+      # "nothing failed" and "never asked" have to look different.
+      - expr: 'sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", outcome=~"CLIENT_ERROR|SERVER_ERROR"}[30m])) or sum by (api) (0 * api_endpoint_info{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"})'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 60
+          - labels: '{api="get_user"}'
+            value: 0
+          - labels: '{api="delete_user"}'
+            value: 0
+
+      # Average response time: the timer's own sum over its own count, so it is
+      # exact and not a percentile estimate. create_user spent 90s on 300
+      # requests, get_user 15s on 120. delete_user is absent on purpose.
+      - expr: 'sum by (api) (increase(http_server_requests_seconds_sum{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])) / sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 0.3
+          - labels: '{api="get_user"}'
+            value: 0.125
+
+      # The failing API is slower than the healthy one here, but only because of
+      # what it spent on the calls it failed - which is why the two counts and
+      # the average are read side by side rather than one of them alone.
+
+      # Client and server errors split apart. Both are failures; only one of
+      # them is the service's fault.
+      - expr: 'sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", outcome="CLIENT_ERROR"}[30m])) or sum by (api) (0 * api_endpoint_info{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"})'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 30
+          - labels: '{api="get_user"}'
+            value: 0
+          - labels: '{api="delete_user"}'
+            value: 0
+      - expr: 'sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", outcome="SERVER_ERROR"}[30m])) or sum by (api) (0 * api_endpoint_info{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"})'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 30
+          - labels: '{api="get_user"}'
+            value: 0
+          - labels: '{api="delete_user"}'
+            value: 0
+
+      # Failure %: 60 of create_user's 300 requests. get_user reads 0%, and
+      # delete_user is absent - a share of no requests is not 0%, it is nothing.
+      - expr: '100 * (sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", outcome=~"CLIENT_ERROR|SERVER_ERROR"}[30m])) or sum by (api) (0 * api_endpoint_info{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"})) / sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 20
+          - labels: '{api="get_user"}'
+            value: 0
+
+      # Total, the column the two counts add up to.
+      - expr: 'sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])) or sum by (api) (0 * api_endpoint_info{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"})'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 300
+          - labels: '{api="get_user"}'
+            value: 120
+          - labels: '{api="delete_user"}'
+            value: 0
+
+      # The bar gauge carries the catalog title through group_left, so an API
+      # with no traffic drops off it rather than drawing an empty bar.
+      - expr: 'sum by (api) (increase(http_server_requests_seconds_sum{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])) / sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])) * on (api) group_left(title) max by (api, title) (api_endpoint_info{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"})'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user", title="Create user"}'
+            value: 0.3
+          - labels: '{api="get_user", title="Get user"}'
+            value: 0.125
+
+      # =====================================================================
+      # Service totals - the stat row across the top
+      # =====================================================================
+      - expr: 'sum(increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])) or vector(0)'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{}'
+            value: 420
+      - expr: 'sum(increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", outcome!~"CLIENT_ERROR|SERVER_ERROR"}[30m])) or vector(0)'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{}'
+            value: 360
+      - expr: 'sum(increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", outcome=~"CLIENT_ERROR|SERVER_ERROR"}[30m])) or vector(0)'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{}'
+            value: 60
+      # 60 of the 420 requests failed. The stat panel rounds it to 14.29%.
+      - expr: '100 * (sum(increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", outcome=~"CLIENT_ERROR|SERVER_ERROR"}[30m]))) / (sum(increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{}'
+            value: 14.285714285714286
+      - expr: 'sum(increase(http_server_requests_seconds_sum{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m])) / sum(increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[30m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{}'
+            value: 0.25
+
+      # Uncatalogued traffic is counted on its own and stays out of every panel
+      # above, including the totals - the endpoint picker never selects it.
+      - expr: 'sum(increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api="other"}[30m])) or vector(0)'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{}'
+            value: 30
+
+      # With no traffic at all, the counts still read 0 rather than "No data" -
+      # this is the same expression evaluated before the first sample lands.
+      - expr: 'sum(increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", outcome=~"CLIENT_ERROR|SERVER_ERROR"}[30m])) or vector(0)'
+        eval_time: 0m
+        exp_samples:
+          - labels: '{}'
+            value: 0
+
+      # =====================================================================
+      # Over time - one step of a chart rather than the whole range
+      # =====================================================================
+      - expr: 'sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", outcome!~"CLIENT_ERROR|SERVER_ERROR"}[5m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 40
+          - labels: '{api="get_user"}'
+            value: 20
+      - expr: 'sum by (api) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", outcome=~"CLIENT_ERROR|SERVER_ERROR"}[5m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 10
+
+      # The average is computed from rates over the step, so it holds the same
+      # 0.3s the range-wide figure reports when the traffic is steady.
+      - expr: 'sum by (api) (rate(http_server_requests_seconds_sum{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[5m])) / sum by (api) (rate(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[5m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user"}'
+            value: 0.3
+          - labels: '{api="get_user"}'
+            value: 0.125
+
+      # =====================================================================
+      # What failed
+      # =====================================================================
+      - expr: 'sum by (status) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", outcome=~"CLIENT_ERROR|SERVER_ERROR"}[5m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{status="400"}'
+            value: 5
+          - labels: '{status="500"}'
+            value: 5
+
+      # The exception column separates a request the service rejected on
+      # purpose from one that threw on the way out.
+      - expr: 'sum by (api, status, exception) (increase(http_server_requests_seconds_count{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user", outcome=~"CLIENT_ERROR|SERVER_ERROR"}[30m]))'
+        eval_time: 30m
+        exp_samples:
+          - labels: '{api="create_user", status="400", exception="none"}'
+            value: 30
+          - labels: '{api="create_user", status="500", exception="IllegalStateException"}'
+            value: 30

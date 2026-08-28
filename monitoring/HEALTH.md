@@ -10,16 +10,17 @@ every declared dependency up? ---> EndpointHealthMonitor --> /actuator/prometheu
 5xx ratio over the window?    --/     (every 15s)         \-> GET /monitoring/endpoints
 ```
 
-This is one of the two monitoring documents here, and the one that answers
+This is one of the three monitoring documents here, and the one that answers
 "is this endpoint alright?":
 
 | Document | Question it answers |
 | --- | --- |
 | **HEALTH.md** (this file) | Whether each endpoint is fit to serve - including the ones nobody called. |
+| [API-METRICS.md](API-METRICS.md) | How many calls each API served, how many failed, and how long they took. |
 | [CONNECTIVITY.md](CONNECTIVITY.md) | Whether Oracle, Redis and Kafka are reachable at all. |
 
-[README.md](README.md) covers what the two have in common: the endpoint catalog
-and the scrape.
+[README.md](README.md) covers what the three have in common: the endpoint
+catalog and the scrape.
 
 ## Why a request ratio was not enough
 
@@ -45,6 +46,12 @@ endpoints are about to follow.
 
 Health starts from what can be checked without a request, and only then looks at
 traffic.
+
+None of that makes the counts useless - they are what says how much traffic was
+affected and what the callers actually saw, which a verdict cannot. That is
+[API-METRICS.md](API-METRICS.md)'s dashboard, and the two are meant to be read
+together: it says how many calls failed, health says whether the endpoint is
+still fit to take the next one.
 
 ## The three checks
 
