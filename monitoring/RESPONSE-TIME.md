@@ -104,12 +104,12 @@ than a log search:
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `api_slow_requests_total` | counter | `api`, `method`, `status`, `severity`, `microservice` | One per request at or over the slow threshold. `severity` is `slow` or `very_slow`. |
-| `api_request_duration_last_seconds` | gauge | `api`, `microservice` | The response time of the most recent request that API served. |
+| `api_request_duration_last_seconds` | gauge | `api`, `microservice` | The response time of the most recent request that API served. It keeps that value until the next request replaces it, so a scrape carries it whether or not anything was served since the last one. |
 
 Cardinality is bounded by the catalog: nine APIs times the handful of statuses
 they answer, times two severities, and only for requests that were actually slow.
 
-Two things to know about these numbers:
+Three things to know about these numbers:
 
 - **The recorder measures more than the timer does.** It is on the stack for the
   whole filter chain; `http_server_requests` starts inside the dispatcher
@@ -122,6 +122,26 @@ Two things to know about these numbers:
   the last request before the scrape, so on a busy API it shows one request in
   hundreds. It is most useful on a quiet endpoint, where the last request is most
   of them.
+- **It is a gauge, and a gauge outlives the request it came from.** Nothing sets
+  it back when the traffic stops: the value of the last request an API served is
+  still there an hour later, and charted on its own it draws a flat line across
+  an endpoint that is answering nothing at all. The panel that reads it keeps
+  that value only while it is still moving:
+
+  ```promql
+  api_request_duration_last_seconds{...}
+    and (changes(api_request_duration_last_seconds{...}[$__rate_interval]) > 0)
+  ```
+
+  A value that has not changed across the window is a request that has already
+  been drawn, so the line stops there and the chart goes empty - and starts again
+  by itself at the next request, which moves the gauge again. The gate is the
+  gauge's own movement rather than the request counter beside it, so it holds for
+  the requests the recorder sees and `http_server_requests` does not: the ones
+  rejected in the filter chain, which never reached a handler. The cost of
+  reading it that way is the window - the line runs on for up to one
+  `$__rate_interval` past the last request, and an API called exactly once, ever,
+  never gets a second sample to be different from and so is not drawn at all.
 
 Uncatalogued traffic - everything tagged `api="other"`, the actuator endpoints
 included - is not recorded at all unless `include-uncatalogued` is turned on. It
@@ -189,7 +209,7 @@ differently for crossing one, and nothing alerts on them.
 | Over time | Requests slower than the threshold | How many requests crossed the line, per step, stacked by API. |
 | Individual requests | Slow requests recorded by the service | The recorder's own count, split by severity. Every request on this chart is also a WARN line in the log. |
 | Individual requests | Slow requests by API, status and severity | The breakdown. A slow 200 is the service being slow; a slow 500 is usually a timeout underneath it. |
-| Individual requests | Most recent request, by API | One real request per API per scrape. |
+| Individual requests | Most recent request, by API | One real request per API per scrape. The line stops where the API stops being called, and resumes at the next request. |
 
 Three selectors at the top: **Microservice** and **API**, the same two the other
 dashboards carry, and **Slow at**, which sets what the "slower than threshold"
@@ -227,7 +247,10 @@ them to whatever reads well for this service.
 percentiles against a fixture whose bucket counts are chosen so the expected
 values can be worked out by hand, the exact slowest request beside them, the
 over-threshold counts, and the blank a percentile leaves for an API with no
-traffic.
+traffic. A second fixture takes an API through being called, going quiet and
+being called again, which is the one thing the first cannot show: that the most
+recent request panel stops where the traffic stops rather than holding its last
+value.
 
 ```sh
 cd monitoring/prometheus
