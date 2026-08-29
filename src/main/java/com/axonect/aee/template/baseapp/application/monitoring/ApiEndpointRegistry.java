@@ -12,8 +12,11 @@
 package com.axonect.aee.template.baseapp.application.monitoring;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.util.AntPathMatcher;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,6 +33,11 @@ import java.util.regex.Pattern;
  * {@code /api/user/40-e1-e4-bc-d8-30}), so matching is a lookup rather than a
  * path match. Path variable names are erased first, which keeps the catalog
  * working when a controller renames a {@code @PathVariable}.</p>
+ *
+ * <p>A request that never reached a handler has no template to look up - see
+ * {@link #tagForRequestPath(String, String)}, which matches the raw path
+ * against the catalog instead so that a rejected request is still attributed to
+ * the API it was aimed at.</p>
  */
 @Slf4j
 public class ApiEndpointRegistry {
@@ -38,14 +46,23 @@ public class ApiEndpointRegistry {
     private static final Pattern PATH_VARIABLE = Pattern.compile("\\{[^/]*}");
 
     /** The {@code api} tag given to traffic that is not in the catalog. */
-    private static final String UNMATCHED = "other";
+    public static final String UNMATCHED = "other";
+
+    /**
+     * Matches a raw request path against a catalog URI template. Only ever asked
+     * about the handful of templates in the catalog, and only for requests that
+     * carry no template of their own.
+     */
+    private static final AntPathMatcher PATH_MATCHER = new AntPathMatcher();
 
     private final Map<String, MonitoredEndpoint> byMethodAndUri;
     private final Map<String, MonitoredEndpoint> byName;
+    private final List<CatalogPath> paths;
 
     public ApiEndpointRegistry(List<MonitoredEndpoint> endpoints) {
         Map<String, MonitoredEndpoint> uriIndex = new HashMap<>();
         Map<String, MonitoredEndpoint> nameIndex = new LinkedHashMap<>();
+        List<CatalogPath> pathPatterns = new ArrayList<>();
 
         for (MonitoredEndpoint endpoint : endpoints) {
             if (endpoint.getName() == null || endpoint.getName().isBlank()) {
@@ -65,12 +82,15 @@ public class ApiEndpointRegistry {
                 if (previous != null) {
                     log.warn("Endpoints '{}' and '{}' both claim {} - '{}' wins",
                             previous.getName(), endpoint.getName(), key, previous.getName());
+                    continue;
                 }
+                pathPatterns.add(new CatalogPath(method(endpoint.getMethod()), normalizePath(uri), endpoint));
             }
         }
 
         this.byMethodAndUri = Collections.unmodifiableMap(uriIndex);
         this.byName = Collections.unmodifiableMap(nameIndex);
+        this.paths = List.copyOf(pathPatterns);
         log.info("REST availability monitoring catalog loaded: {} endpoint(s), {} request mapping(s)",
                 byName.size(), byMethodAndUri.size());
     }
@@ -91,6 +111,54 @@ public class ApiEndpointRegistry {
     }
 
     /**
+     * Resolves an API from the path the caller actually asked for, for requests
+     * that never got as far as a handler.
+     *
+     * <p>{@link #tagFor(String, String)} needs the templated URI Spring matched,
+     * and a request rejected in the filter chain - a missing {@code channel}
+     * header, credentials that did not check out, the rate limiter, the request
+     * firewall - never gets one. Micrometer reports those as {@code uri=UNKNOWN},
+     * so tagging from the template alone files every one of them under
+     * {@value #UNMATCHED} and the API they were aimed at reads as though nothing
+     * had failed. Matching the raw path against the catalog puts the rejection
+     * back on the API that was called.</p>
+     *
+     * <p>Cardinality is unchanged: the path is only ever used to pick a catalog
+     * entry, and anything it does not match is still {@value #UNMATCHED}. The
+     * method has to match as well, so a 405 on a catalogued path does not borrow
+     * the series of the verb that <em>is</em> mapped there.</p>
+     *
+     * @param requestUri the URI the container saw, context path and matrix
+     *                   variables included - both are stripped here, so callers
+     *                   can pass {@code HttpServletRequest.getRequestURI()}
+     *                   straight through
+     * @param contextPath the prefix the container is serving this application
+     *                    under, or empty when it is serving the root
+     * @return the value of the {@code api} metric tag for the given request.
+     */
+    public String tagForRequestPath(String method, String requestUri, String contextPath) {
+        if (method == null || requestUri == null) {
+            return UNMATCHED;
+        }
+        String wanted = method(method);
+        String path = normalizePath(strip(requestUri, contextPath));
+        Comparator<String> mostSpecificFirst = PATH_MATCHER.getPatternComparator(path);
+
+        MonitoredEndpoint match = null;
+        String matchedPattern = null;
+        for (CatalogPath candidate : paths) {
+            if (!candidate.method().equals(wanted) || !PATH_MATCHER.match(candidate.pattern(), path)) {
+                continue;
+            }
+            if (matchedPattern == null || mostSpecificFirst.compare(candidate.pattern(), matchedPattern) < 0) {
+                matchedPattern = candidate.pattern();
+                match = candidate.endpoint();
+            }
+        }
+        return match == null ? UNMATCHED : match.getName();
+    }
+
+    /**
      * @return every catalog entry, in declaration order.
      */
     public List<MonitoredEndpoint> endpoints() {
@@ -106,7 +174,29 @@ public class ApiEndpointRegistry {
      * nothing if it normalised paths even slightly differently from this.</p>
      */
     public static String normalizeUri(String uri) {
-        String normalized = PATH_VARIABLE.matcher(uri.trim()).replaceAll("{}");
+        return normalizePath(PATH_VARIABLE.matcher(uri).replaceAll("{}"));
+    }
+
+    /**
+     * The request path as the catalog spells it: without the context path the
+     * container prefixed, and without any matrix variables appended to a segment.
+     */
+    private static String strip(String requestUri, String contextPath) {
+        String path = requestUri;
+        if (contextPath != null && !contextPath.isEmpty() && path.startsWith(contextPath)) {
+            path = path.substring(contextPath.length());
+        }
+        int matrixVariable = path.indexOf(';');
+        return matrixVariable < 0 ? path : path.substring(0, matrixVariable);
+    }
+
+    /**
+     * Trims and squares up a path or URI template without touching its path
+     * variables - {@link #normalizeUri(String)} erases their names, which is what
+     * the lookup index wants and what {@link AntPathMatcher} cannot match on.
+     */
+    private static String normalizePath(String path) {
+        String normalized = path.trim();
         if (!normalized.startsWith("/")) {
             normalized = "/" + normalized;
         }
@@ -116,8 +206,15 @@ public class ApiEndpointRegistry {
         return normalized;
     }
 
+    private static String method(String method) {
+        return method == null ? "" : method.trim().toUpperCase(Locale.ROOT);
+    }
+
     private static String key(String method, String uri) {
-        String normalizedMethod = method == null ? "" : method.trim().toUpperCase(Locale.ROOT);
-        return normalizedMethod + " " + normalizeUri(uri);
+        return method(method) + " " + normalizeUri(uri);
+    }
+
+    /** One catalog URI template, kept spelled as configured so it can be matched against a live path. */
+    private record CatalogPath(String method, String pattern, MonitoredEndpoint endpoint) {
     }
 }

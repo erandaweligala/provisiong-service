@@ -67,7 +67,7 @@ public class ApiResponseTimeRecorder extends OncePerRequestFilter {
     static final String LAST_DURATION_METRIC = "api.request.duration.last";
 
     private static final String START_ATTRIBUTE = ApiResponseTimeRecorder.class.getName() + ".start";
-    private static final String UNMATCHED_API = "other";
+    private static final String UNMATCHED_API = ApiEndpointRegistry.UNMATCHED;
 
     private static final String TAG_API = "api";
     private static final String TAG_METHOD = "method";
@@ -182,15 +182,19 @@ public class ApiResponseTimeRecorder extends OncePerRequestFilter {
      * Resolves the API from the URI template Spring matched, which is the same
      * value the {@code api} tag on {@code http_server_requests} is derived from -
      * so a request appears under the same name on every panel of the dashboard.
-     * A request that reached no handler has no template and lands on
-     * {@code other}.
+     *
+     * <p>A request rejected in the filter chain never reached a handler and so has
+     * no template. It is matched on the path the caller asked for instead, for the
+     * same reason and by the same rule the {@code api} tag uses - a rejected
+     * request that lands on {@code other} here would drop out of this filter's
+     * metrics entirely, because {@code include-uncatalogued} is off.</p>
      */
     private String apiOf(HttpServletRequest request) {
         Object pattern = request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
-        if (pattern == null) {
-            return UNMATCHED_API;
+        if (pattern != null) {
+            return endpoints.tagFor(request.getMethod(), pattern.toString());
         }
-        return endpoints.tagFor(request.getMethod(), pattern.toString());
+        return endpoints.tagForRequestPath(request.getMethod(), request.getRequestURI(), request.getContextPath());
     }
 
     private AtomicLong lastDuration(String api) {

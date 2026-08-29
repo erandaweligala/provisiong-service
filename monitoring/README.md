@@ -61,6 +61,15 @@ The `api` label comes from `monitoring.api.endpoints[].name`. Traffic to a path
 that is not in the catalog is tagged `api="other"`, so the label can never blow
 up Prometheus cardinality no matter what gets requested.
 
+Which entry a request belongs to is normally read off the URI template Spring
+matched. A request rejected in the filter chain - a missing `channel` header,
+credentials that did not check out, the rate limiter, the request firewall -
+never reached a handler and has no template, so the catalog is matched against
+the path the caller actually asked for instead. Those are 4xx aimed at a real
+API, and leaving them on `other` would take them off that API's failure count;
+see [API-METRICS.md](API-METRICS.md#a-request-that-never-reached-a-handler). The
+HTTP method has to match too, so a 405 stays on `other` - nothing served it.
+
 Every meter also carries a `microservice` common tag, which is what lets the
 alert rules stay scoped to this service on a Prometheus shared with the rest of
 the AAA stack.

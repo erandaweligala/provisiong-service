@@ -58,6 +58,48 @@ count that is entirely 4xx is a client sending bad requests; the same count in
 5xx is this service breaking. Per-endpoint health, by contrast, only counts 5xx
 - see [HEALTH.md](HEALTH.md) for why the two differ.
 
+### A request that never reached a handler
+
+Not every failure gets as far as a controller. `ChannelAuthFilter` answers 400
+for a missing `channel` header and 401 for credentials that did not check out,
+the rate limiter answers 429, and Spring Security's request firewall answers 400
+- all of them from the filter chain, before Spring has matched a handler.
+
+Those requests have no URI template, and Micrometer reports them as
+`uri="UNKNOWN"`. Reading the `api` tag off the template alone therefore filed
+every one of them under `api="other"`, which the **API** picker never selects:
+the 4xx disappeared from the API's Failed count, from `Client errors (4xx)`, and
+from the totals across the top, while `Uncatalogued` quietly grew. An API being
+hammered with bad credentials read as an API where nothing had failed.
+
+`ApiNameObservationConvention` now matches the path the caller asked for against
+the catalog when there is no template, so the rejection is counted against the
+API it was aimed at. Cardinality is unchanged - the path only ever picks a
+catalog entry, and anything unrecognised is still `other`. The method has to
+match as well, so a 405 on a catalogued path stays on `other`: nothing served
+it, and it is not a failure of the verb that *is* mapped there.
+
+### A request that failed on its way out
+
+The observation is stopped as the request leaves the filter chain, which is
+before the container's error dispatch has set a status on the response. An
+exception nothing handled - thrown by a filter, or by anything
+`GlobalExceptionHandler` does not cover - was therefore timed with whatever
+status the response still carried, normally 200, and counted as a **success**
+even though the caller received a 500.
+
+The convention overrides `status` and `outcome` for that case: an observation
+that carries an error and a status still below 400 is recorded as `500` /
+`SERVER_ERROR`, the answer the caller is about to be given. That is the rule
+`ApiResponseTimeRecorder` already applied to its own `status` tag, so the timer
+and the per-request metrics beside it now say the same thing about the same
+request - the recorder resolves a rejected request's API the same way too, and
+would otherwise have dropped it entirely, since `include-uncatalogued` is off.
+
+Both corrections matter in the same direction. Neither one leaves a gap on the
+dashboard when it is missing - both report a success instead, which is the one
+kind of wrong a failure count must not be.
+
 ### Why the average and not a percentile
 
 The average is exact: it is the timer's own total time divided by its own
@@ -153,6 +195,11 @@ in the panel's `fieldConfig.overrides` - change them to whatever reads well for
 this service.
 
 ## Testing the queries
+
+The tags the queries read are covered by `ApiNameObservationConventionTest` and
+`ApiEndpointRegistryTest`: that a request rejected before the handler is counted
+against its API, that an unrecognised path still collapses to `other`, and that
+an exception which escaped the chain is recorded as a 500 rather than a success.
 
 `prometheus/user-provisioning-api-metrics-queries_test.yaml` is a `promtool`
 unit test over the panel expressions themselves: it asserts the success/failure
