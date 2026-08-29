@@ -50,7 +50,11 @@ import java.util.concurrent.atomic.AtomicLong;
  *       many there were is a chart rather than a log search;</li>
  *   <li>{@code api_request_duration_last_seconds} holds the duration of the most
  *       recent request per API, which is one real request's response time rather
- *       than an aggregate of many.</li>
+ *       than an aggregate of many. It is a gauge and keeps that value until the
+ *       next request replaces it, so every scrape carries it whether or not the
+ *       API was called since the last one; the dashboard draws it only while it
+ *       is still changing, so an API that goes quiet leaves a gap rather than a
+ *       flat line at its last request.</li>
  * </ul>
  *
  * <p>The duration measured here is the time this filter is on the stack. It is a

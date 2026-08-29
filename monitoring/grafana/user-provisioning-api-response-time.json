@@ -1815,7 +1815,7 @@
       "id": 20,
       "type": "timeseries",
       "title": "Most recent request, by API",
-      "description": "The response time of the last request each API served before the scrape - one individual request, sampled every scrape interval rather than averaged. It is a sample and not a summary: the requests between two scrapes are not on this chart, which is why the panels above read the distribution instead. Useful on a quiet endpoint, where the last request is most of them, and as a sanity check that an API is answering at all.",
+      "description": "The response time of the last request each API served before the scrape - one individual request, sampled every scrape interval rather than averaged. The gauge behind it holds that value until the next request replaces it, so the line is drawn only while the value is still moving: an API that stops being called stops here rather than flat-lining on its last request, and starts again when the next request arrives. It is a sample and not a summary: the requests between two scrapes are not on this chart, which is why the panels above read the distribution instead. Useful on a quiet endpoint, where the last request is most of them, and as a sanity check that an API is answering at all.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -1833,7 +1833,7 @@
             "uid": "${datasource}"
           },
           "refId": "A",
-          "expr": "api_request_duration_last_seconds{microservice=~\"$microservice\", api=~\"$api\"}",
+          "expr": "api_request_duration_last_seconds{microservice=~\"$microservice\", api=~\"$api\"} and (changes(api_request_duration_last_seconds{microservice=~\"$microservice\", api=~\"$api\"}[$__rate_interval]) > 0)",
           "editorMode": "code",
           "range": true,
           "instant": false,
@@ -1850,7 +1850,7 @@
             "fillOpacity": 0,
             "gradientMode": "none",
             "spanNulls": false,
-            "showPoints": "auto",
+            "showPoints": "always",
             "pointSize": 5,
             "stacking": {
               "mode": "none",
@@ -1887,7 +1887,7 @@
               }
             ]
           },
-          "noValue": "No request since startup"
+          "noValue": "No request in this range"
         },
         "overrides": []
       },

@@ -56,6 +56,12 @@
 # interval Prometheus will extrapolate across, so a counter climbing 10/min over
 # the window comes back as exactly 300.
 
+# A second test follows the first, on a fixture of its own: one API called, then
+# not called, then called again. It is the one thing this fixture cannot say,
+# because every API in it that has an `api_request_duration_last_seconds` gauge
+# is called for the whole range - and what happens when an API stops being
+# called is exactly what the "Most recent request" panel has to get right.
+
 evaluation_interval: 1m
 
 tests:
@@ -146,8 +152,11 @@ tests:
         values: '0+2x30'
       - series: 'api_slow_requests_total{microservice="airtel-aaa-user-provisioning-service", api="create_user", method="POST", status="500", severity="very_slow"}'
         values: '0+1x30'
+      # The last request before each scrape. A different request every minute,
+      # so the gauge carries a different value every minute - which is what the
+      # panel's query looks for to decide the API is still being called.
       - series: 'api_request_duration_last_seconds{microservice="airtel-aaa-user-provisioning-service", api="create_user"}'
-        values: '0.42+0x30'
+        values: '0.42 0.38 0.45 0.41 0.39 0.44 0.4 0.43 0.37 0.46 0.42 0.39 0.44 0.41 0.38 0.45 0.4 0.43 0.39 0.42 0.46 0.38 0.41 0.44 0.4 0.37 0.45 0.42 0.39 0.31 0.44'
 
     promql_expr_test:
       # =====================================================================
@@ -346,10 +355,81 @@ tests:
           - labels: '{api="create_user", method="POST", status="500", severity="very_slow"}'
             value: 30
 
-      # The last request each API served before the scrape. A gauge, read as it
-      # is - no rate, no window, one request.
-      - expr: 'api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}'
+      # The last request each API served before the scrape. The gauge itself is
+      # read as it is - no rate, no window, one request - and the `and changes()`
+      # beside it only decides whether to draw it: the gauge keeps its last value
+      # for as long as the process lives, so a value that has stopped moving is a
+      # request that has already been drawn, not a new one. Here create_user is
+      # still being called, so the last request is on the chart.
+      - expr: 'api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"} and (changes(api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[5m]) > 0)'
         eval_time: 30m
         exp_samples:
           - labels: 'api_request_duration_last_seconds{microservice="airtel-aaa-user-provisioning-service", api="create_user"}'
-            value: 0.42
+            value: 0.44
+
+  # =========================================================================
+  # An API that stops being called, and is called again
+  # =========================================================================
+  #
+  # Every API with a gauge in the fixture above is called for the whole range,
+  # so it can say what the panel draws and not when it stops. That needs a
+  # second story rather than a fourth API added to the first: get_user called
+  # once a minute for ten minutes, quiet for a quarter of an hour, and called
+  # once more at minute 25.
+  #
+  # The counter stops climbing while it is quiet, and
+  # `api_request_duration_last_seconds` keeps the tenth request's duration for
+  # as long as the process lives - it is a gauge, and nothing sets it back.
+  # Read on its own it draws a flat line across an endpoint that is serving
+  # nothing at all, which is what the `and changes()` in the panel query is
+  # there to stop.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{microservice="airtel-aaa-user-provisioning-service", api="get_user", method="GET", uri="/api/user/{user_name}", status="200", outcome="SUCCESS"}'
+        values: '1+1x9 10+0x14 11+0x6'
+      - series: 'api_request_duration_last_seconds{microservice="airtel-aaa-user-provisioning-service", api="get_user"}'
+        values: '0.031 0.028 0.044 0.03 0.035 0.027 0.033 0.041 0.029 0.036 0.036+0x14 0.052+0x6'
+
+    promql_expr_test:
+      # While the requests are coming in, the panel draws the last one.
+      - expr: 'api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"} and (changes(api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[5m]) > 0)'
+        eval_time: 9m
+        exp_samples:
+          - labels: 'api_request_duration_last_seconds{microservice="airtel-aaa-user-provisioning-service", api="get_user"}'
+            value: 0.036
+
+      # Eleven minutes after the last request the gauge is still reporting it.
+      # The data is right - that was the last request - and a line drawn from it
+      # is not: nothing has been served since minute 9.
+      - expr: 'api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'api_request_duration_last_seconds{microservice="airtel-aaa-user-provisioning-service", api="get_user"}'
+            value: 0.036
+
+      # The panel's query keeps the value for as long as it is still new: two
+      # minutes past the last request it is on the chart...
+      - expr: 'api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"} and (changes(api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[5m]) > 0)'
+        eval_time: 12m
+        exp_samples:
+          - labels: 'api_request_duration_last_seconds{microservice="airtel-aaa-user-provisioning-service", api="get_user"}'
+            value: 0.036
+
+      # ...and once the whole window holds one unchanged value, the line stops.
+      # From here it is a gap on the chart rather than a response time to read.
+      - expr: 'api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"} and (changes(api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[5m]) > 0)'
+        eval_time: 16m
+        exp_samples: []
+
+      - expr: 'api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"} and (changes(api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[5m]) > 0)'
+        eval_time: 20m
+        exp_samples: []
+
+      # The next request starts it again on its own. Nothing is reset and no
+      # request is lost: the call at minute 25 moves the gauge, and the scrape
+      # after it puts the value back on the chart.
+      - expr: 'api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"} and (changes(api_request_duration_last_seconds{microservice=~"airtel-aaa-user-provisioning-service", api=~"create_user|get_user|delete_user"}[5m]) > 0)'
+        eval_time: 26m
+        exp_samples:
+          - labels: 'api_request_duration_last_seconds{microservice="airtel-aaa-user-provisioning-service", api="get_user"}'
+            value: 0.052
