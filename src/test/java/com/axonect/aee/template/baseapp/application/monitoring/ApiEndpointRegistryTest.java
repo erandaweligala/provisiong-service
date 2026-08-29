@@ -115,6 +115,71 @@ class ApiEndpointRegistryTest {
                 registry.endpoints().stream().map(MonitoredEndpoint::getName).toList());
     }
 
+    // ---------------------------------------------------------------------
+    // tagForRequestPath: the fallback for requests that never reached a handler
+    // ---------------------------------------------------------------------
+
+    @Test
+    void matchesALiveRequestPathAgainstTheCatalog() {
+        ApiEndpointRegistry registry = registry(
+                endpoint("get_user", "GET", "/api/user/{user_name}"),
+                endpoint("create_user", "POST", "/api/user"));
+
+        // A request rejected in the filter chain has no URI template, only the
+        // path the caller asked for - and it still failed against a real API.
+        assertEquals("get_user", registry.tagForRequestPath("GET", "/api/user/40-e1-e4-bc-d8-30", ""));
+        assertEquals("create_user", registry.tagForRequestPath("POST", "/api/user", ""));
+    }
+
+    @Test
+    void keepsThePathFallbackBoundedByTheCatalog() {
+        ApiEndpointRegistry registry = registry(endpoint("get_user", "GET", "/api/user/{user_name}"));
+
+        // The raw path must never become a label value of its own.
+        assertEquals("other", registry.tagForRequestPath("GET", "/api/bng/1", ""));
+        assertEquals("other", registry.tagForRequestPath("GET", "/actuator/prometheus", ""));
+        assertEquals("other", registry.tagForRequestPath("GET", "/api/user/a/b", ""));
+        assertEquals("other", registry.tagForRequestPath(null, null, null));
+    }
+
+    @Test
+    void stripsTheContextPathAndMatrixVariablesFromTheRequestUri() {
+        ApiEndpointRegistry registry = registry(endpoint("get_user", "GET", "/api/user/{user_name}"));
+
+        assertEquals("get_user", registry.tagForRequestPath("GET", "/aaa/api/user/bob", "/aaa"));
+        assertEquals("get_user", registry.tagForRequestPath("GET", "/api/user/bob;v=2", ""));
+        assertEquals("get_user", registry.tagForRequestPath("GET", "/api/user/bob", null));
+    }
+
+    @Test
+    void doesNotLetAWrongMethodBorrowAnApisSeries() {
+        ApiEndpointRegistry registry = registry(endpoint("create_user", "POST", "/api/user"));
+
+        // A 405 is not a failure of create_user; nothing served it.
+        assertEquals("other", registry.tagForRequestPath("DELETE", "/api/user", ""));
+        assertEquals("create_user", registry.tagForRequestPath("post", "/api/user/", ""));
+    }
+
+    @Test
+    void prefersTheMoreSpecificPatternWhenTwoWouldMatch() {
+        ApiEndpointRegistry registry = registry(
+                endpoint("get_user", "GET", "/api/user/{user_name}"),
+                endpoint("list_users", "GET", "/api/user/list"));
+
+        assertEquals("list_users", registry.tagForRequestPath("GET", "/api/user/list", ""));
+        assertEquals("get_user", registry.tagForRequestPath("GET", "/api/user/bob", ""));
+    }
+
+    @Test
+    void matchesEveryPathOfAMultiMappedHandlerOntoOneEndpoint() {
+        ApiEndpointRegistry registry = registry(endpoint("update_service", "PATCH",
+                "/api/user/{user_id}/services/{plan_id}/{request_id}",
+                "/api/user/services/{user_id}/{plan_id}/{request_id}"));
+
+        assertEquals("update_service", registry.tagForRequestPath("PATCH", "/api/user/7/services/3/req-1", ""));
+        assertEquals("update_service", registry.tagForRequestPath("PATCH", "/api/user/services/7/3/req-1", ""));
+    }
+
     @Test
     void normalizesUrisForComparison() {
         assertEquals("/api/user/{}", ApiEndpointRegistry.normalizeUri("/api/user/{user_name}"));

@@ -151,6 +151,21 @@ class ApiResponseTimeRecorderTest {
     }
 
     @Test
+    void reportsARequestRejectedBeforeTheHandlerUnderTheApiItAskedFor() throws ServletException, IOException {
+        everyRequestIsSlow();
+        // ChannelAuthFilter answers 401 without the dispatcher ever running, so
+        // there is no best-matching pattern to read the API off.
+        MockHttpServletRequest rejected = new MockHttpServletRequest("POST", CREATE_USER_URI);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        response.setStatus(401);
+
+        recorder.doFilter(rejected, response, new MockFilterChain());
+
+        assertEquals(1, slowRequests("create_user", "401", "slow").count(),
+                "a rejected request is still a request against that API");
+    }
+
+    @Test
     void waitsForTheAsyncDispatchBeforeRecordingAnAsyncRequest() throws ServletException, IOException {
         everyRequestIsSlow();
         MockHttpServletRequest request = catalogued();
